@@ -11,7 +11,7 @@ Self-hosted, Gmail-style webmail that runs entirely on your own Cloudflare accou
 
 **[Try the demo](https://prastavna.github.io/cfw-mailbox/)**: the real interface with made-up mail. It runs entirely in your browser, so nothing is sent and it resets when you reload.
 
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/OWNER/cfw-mailbox)
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/Prastavna/cfw-mailbox)
 
 ## Stack
 
