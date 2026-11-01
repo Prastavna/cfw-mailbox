@@ -1,0 +1,39 @@
+/**
+ * cfw-mailbox — self-hosted, Gmail-style webmail on Cloudflare Workers.
+ * https://developers.cloudflare.com/workers/wrangler/configuration/
+ */
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "cfw-mailbox",
+	"compatibility_date": "2026-10-23",
+	"main": "./workers/app.ts",
+	"observability": { "enabled": true },
+	"upload_source_maps": true,
+
+	"vars": {
+		// "access" (production, default) or "dev" (local only; see .dev.vars.example).
+		"AUTH_MODE": "access",
+		// Your Access team domain, e.g. "https://myteam.cloudflareaccess.com".
+		"ACCESS_TEAM_DOMAIN": "",
+		// The Application Audience (AUD) tag of the Access application protecting this Worker.
+		"ACCESS_AUD": "",
+		// Comma-separated emails allowed to manage domains, mailboxes and members.
+		"ADMIN_EMAILS": ""
+	},
+
+	"durable_objects": {
+		"bindings": [
+			// Singleton: domains, mailboxes and who may access them.
+			{ "name": "REGISTRY", "class_name": "RegistryDO" },
+			// One instance per mailbox: messages, threads, labels.
+			{ "name": "MAILBOX", "class_name": "MailboxDO" }
+		]
+	},
+	"migrations": [{ "tag": "v1", "new_sqlite_classes": ["RegistryDO", "MailboxDO"] }],
+
+	// Raw .eml files, large HTML bodies and attachments.
+	"r2_buckets": [{ "binding": "BUCKET", "bucket_name": "cfw-mailbox" }],
+
+	// Outbound mail via Cloudflare Email Service.
+	"send_email": [{ "name": "EMAIL", "remote": true }]
+}
