@@ -12,8 +12,23 @@ export class ApiRequestError extends Error {
 	}
 }
 
+/** The API's URL prefix. The app may be served below a base path (the static demo is). */
+export const API_BASE = `${import.meta.env.BASE_URL.replace(/\/$/, "")}/api`;
+
+export const apiUrl = (path: string) => `${API_BASE}${path}`;
+
+/**
+ * URL for a file the browser opens itself (attachments, raw messages, exports) rather
+ * than through fetch. The static demo replaces it, since it has no server.
+ */
+let fileUrl = apiUrl;
+export const apiFileUrl = (path: string) => fileUrl(path);
+export function setFileUrlResolver(resolve: (path: string) => string) {
+	fileUrl = resolve;
+}
+
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
-	const res = await fetch(`/api${path}`, {
+	const res = await fetch(apiUrl(path), {
 		...init,
 		headers: { ...(init?.body ? { "content-type": "application/json" } : {}), ...init?.headers },
 	});
@@ -71,9 +86,9 @@ export function useThread(mailboxId: string, threadId: string) {
 }
 
 export const attachmentUrl = (mailboxId: string, messageId: string, attachmentId: string, inline = false) =>
-	`/api/mailboxes/${mailboxId}/messages/${messageId}/attachments/${attachmentId}${inline ? "?inline=1" : ""}`;
+	apiFileUrl(`/mailboxes/${mailboxId}/messages/${messageId}/attachments/${attachmentId}${inline ? "?inline=1" : ""}`);
 
-export const rawMessageUrl = (mailboxId: string, messageId: string) => `/api/mailboxes/${mailboxId}/messages/${messageId}/raw`;
+export const rawMessageUrl = (mailboxId: string, messageId: string) => apiFileUrl(`/mailboxes/${mailboxId}/messages/${messageId}/raw`);
 
 export type LiveStatus = "connecting" | "live" | "offline";
 
@@ -99,7 +114,7 @@ export function useMailboxEvents(mailboxId: string, drafts?: { openDraft: (id: s
 		const connect = () => {
 			setStatus("connecting");
 			const proto = location.protocol === "https:" ? "wss" : "ws";
-			ws = new WebSocket(`${proto}://${location.host}/api/mailboxes/${mailboxId}/events`);
+			ws = new WebSocket(`${proto}://${location.host}${apiUrl(`/mailboxes/${mailboxId}/events`)}`);
 			ws.onopen = () => {
 				if (attempts > 0) queryClient.invalidateQueries({ queryKey: queryKeys.mailbox(mailboxId) });
 				attempts = 0;

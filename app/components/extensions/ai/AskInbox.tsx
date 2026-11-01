@@ -6,6 +6,7 @@ import { Link } from "react-router";
 import { AI_LIMITS, type AiThreadHit } from "../../../../shared/extensions";
 import { Button } from "~/components/ui/button";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "~/components/ui/sheet";
+import { apiUrl } from "~/lib/api";
 import { formatListDate } from "~/lib/format";
 import { cn } from "~/lib/utils";
 
@@ -34,7 +35,7 @@ interface AskInboxProps {
  */
 export function AskInbox({ mailboxId, open, onOpenChange }: AskInboxProps) {
 	const transport = useMemo(
-		() => new DefaultChatTransport({ api: `/api/mailboxes/${mailboxId}/ai/chat`, body: () => ({ tz: new Date().getTimezoneOffset() }) }),
+		() => new DefaultChatTransport({ api: apiUrl(`/mailboxes/${mailboxId}/ai/chat`), body: () => ({ tz: new Date().getTimezoneOffset() }) }),
 		[mailboxId],
 	);
 	const { messages, sendMessage, status, stop, error, setMessages, clearError } = useChat({ id: `ask-${mailboxId}`, transport });

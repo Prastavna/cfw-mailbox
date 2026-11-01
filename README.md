@@ -9,6 +9,8 @@ Self-hosted, Gmail-style webmail that runs entirely on your own Cloudflare accou
 
 > Status: **Phase 7 (AI extension)**. Mail is received, threaded and readable; you can archive, delete, report spam, mark read or unread, star and label it, with undo. You can write new messages, reply, reply all and forward in Gmail-style compose windows, with rich text, attachments, auto-saved drafts, a signature and undo send. Search covers every message with Gmail's operators. You can snooze conversations, set up filters and a vacation responder, get recipient suggestions from your contacts, and use Gmail's keyboard shortcuts. Trash and Spam empty themselves after 30 days. Each mailbox can be downloaded as an mbox file. Admins manage domains, mailboxes and members at `/admin`. An optional **AI Assistant** extension, which each user turns on with their own provider key, summarises conversations, drafts replies, rewrites text and answers questions about the mailbox.
 
+**[Try the demo](https://prastavna.github.io/cfw-mailbox/)**: the real interface with made-up mail. It runs entirely in your browser, so nothing is sent and it resets when you reload.
+
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/OWNER/cfw-mailbox)
 
 ## Stack
@@ -26,6 +28,7 @@ app/                 React UI
   lib/email-html.ts  Sanitises HTML mail for a sandboxed iframe (DOMPurify + CSP)
   lib/compose*.ts    Reply recipients, quoting, signature; compose window store
   lib/shortcuts.ts   Keyboard shortcuts
+  demo/              Static showcase only: fake data and an in-browser stand-in for the API
 shared/              Types and helpers used by both browser and Worker
 workers/
   app.ts             Worker entry: /api → Hono, everything else → React Router
@@ -72,6 +75,12 @@ pnpm test:e2e             # end-to-end, against its own `pnpm dev` on port 5180
 ```
 
 The end-to-end tests keep their data in `.wrangler/e2e-state` and create a fresh mailbox per test, so they never touch your dev mail. Set `PLAYWRIGHT_CHROMIUM_EXECUTABLE` to use a Chromium you already have. The AI Assistant tests talk to a scripted, OpenAI-compatible fake provider that the test run starts on port 5181 (`e2e/fake-llm.ts`), so they need no key.
+
+## Demo (GitHub Pages)
+
+`pnpm build:demo` builds the interface as a static single-page app into `build/client/`. It has no Worker behind it: `app/demo/` answers every `/api` request in the browser from invented mail (`app/demo/seed.ts`), stands in for the live-update WebSocket, and gives canned, offline answers for the AI Assistant. It makes no network requests to any API. Sending, labels, snooze, filters, search and the admin page all work in memory and reset on reload. Sent mail gets a simulated reply, and a couple of messages "arrive" while the page is open, to show live updates.
+
+`pnpm dev:demo` runs the same thing locally. The `Demo (GitHub Pages)` workflow publishes it on every push to `main`. It builds for `/<repo name>/`; set `DEMO_BASE` to build for another path. Under the repository's **Settings → Pages**, set **Source** to **GitHub Actions**. Real builds (`pnpm build`) leave the demo code out.
 
 ## Deploying (self-hosting)
 

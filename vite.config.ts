@@ -12,14 +12,20 @@ const DEV_VARS = {
 	ENCRYPTION_KEY: "local-development-only-not-secret",
 };
 
+/** `DEMO=1`: the static showcase with fake data (app/demo/), no Worker. */
+const demo = !!process.env.DEMO;
+
 export default defineConfig(({ command }) => ({
+	base: demo ? (process.env.DEMO_BASE ?? "/") : "/",
+	define: demo ? { "import.meta.env.VITE_DEMO": JSON.stringify("1") } : undefined,
 	plugins: [
-		cloudflare({
-			viteEnvironment: { name: "ssr" },
-			// The end-to-end tests run against their own, throwaway local state.
-			persistState: process.env.E2E ? { path: ".wrangler/e2e-state" } : true,
-			config: command === "serve" ? (config) => ({ vars: { ...config.vars, ...DEV_VARS } }) : undefined,
-		}),
+		!demo &&
+			cloudflare({
+				viteEnvironment: { name: "ssr" },
+				// The end-to-end tests run against their own, throwaway local state.
+				persistState: process.env.E2E ? { path: ".wrangler/e2e-state" } : true,
+				config: command === "serve" ? (config) => ({ vars: { ...config.vars, ...DEV_VARS } }) : undefined,
+			}),
 		tailwindcss(),
 		reactRouter(),
 	],

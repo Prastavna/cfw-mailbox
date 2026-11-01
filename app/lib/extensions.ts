@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ApiError } from "../../shared/api";
 import type { AiModelOption, AiSettings, AiSettingsUpdate, ExtensionInfo } from "../../shared/extensions";
-import { ApiRequestError, apiFetch } from "./api";
+import { ApiRequestError, apiFetch, apiUrl } from "./api";
 
 export const extensionKeys = {
 	all: ["extensions"] as const,
@@ -49,7 +49,7 @@ export function useAiModels(enabled: boolean) {
 
 /** POSTs to an AI endpoint and streams the plain-text answer as it's written. */
 export async function streamAiText(path: string, body: unknown, onText: (soFar: string) => void, signal?: AbortSignal): Promise<string> {
-	const res = await fetch(`/api${path}`, {
+	const res = await fetch(apiUrl(path), {
 		method: "POST",
 		headers: { "content-type": "application/json" },
 		body: JSON.stringify(body),

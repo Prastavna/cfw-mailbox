@@ -18,7 +18,7 @@ import { Input } from "~/components/ui/input";
 import { Label as FieldLabel } from "~/components/ui/label";
 import { Switch } from "~/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "~/components/ui/tabs";
-import { apiFetch, queryKeys } from "~/lib/api";
+import { apiFetch, apiFileUrl, queryKeys } from "~/lib/api";
 import { settingsKey, useSettings } from "~/lib/compose-store";
 
 export type SettingsTab = "general" | "vacation" | "filters";
@@ -288,7 +288,7 @@ function StorageSection({ mailboxId }: { mailboxId: string }) {
 			)}
 			<div>
 				<Button variant="outline" size="sm" asChild>
-					<a href={`/api/mailboxes/${mailboxId}/export.mbox`} download>
+					<a href={apiFileUrl(`/mailboxes/${mailboxId}/export.mbox`)} download>
 						<Download aria-hidden /> Download all mail (.mbox)
 					</a>
 				</Button>

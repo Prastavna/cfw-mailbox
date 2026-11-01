@@ -7,6 +7,8 @@ import { Toaster } from "./components/ui/sonner";
 import { useNonce } from "./lib/nonce";
 import "./app.css";
 
+export const links: Route.LinksFunction = () => [{ rel: "icon", href: `${import.meta.env.BASE_URL}favicon.ico` }];
+
 export function Layout({ children }: { children: React.ReactNode }) {
 	const nonce = useNonce();
 	return (

@@ -10,7 +10,7 @@ import type {
 	MessageDetail,
 	SendResult,
 } from "../../shared/api";
-import { apiFetch, ApiRequestError, queryKeys } from "./api";
+import { apiFetch, ApiRequestError, apiUrl, queryKeys } from "./api";
 import { initialBody, prefixSubject, quoteBlock, quoteDate, replyRecipients, textToHtml } from "./compose";
 
 /** What a new compose window starts with. */
@@ -96,7 +96,7 @@ export const draftsApi = {
 	removeAttachment: (mailboxId: string, id: string, attachmentId: string) =>
 		apiFetch<null>(`/mailboxes/${mailboxId}/drafts/${id}/attachments/${attachmentId}`, { method: "DELETE" }),
 	async upload(mailboxId: string, id: string, file: File): Promise<AttachmentInfo> {
-		const res = await fetch(`/api/mailboxes/${mailboxId}/drafts/${id}/attachments?filename=${encodeURIComponent(file.name)}`, {
+		const res = await fetch(apiUrl(`/mailboxes/${mailboxId}/drafts/${id}/attachments?filename=${encodeURIComponent(file.name)}`), {
 			method: "POST",
 			headers: { "content-type": file.type || "application/octet-stream" },
 			body: file,

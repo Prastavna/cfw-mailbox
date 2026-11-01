@@ -8,6 +8,8 @@
 		"typecheck": "wrangler types --strict-vars=false && react-router typegen && tsc -b",
 		"deploy": "pnpm run build && wrangler deploy",
 		"preview": "pnpm run build && vite preview",
+		"dev:demo": "DEMO=1 react-router dev",
+		"build:demo": "DEMO=1 DEMO_BASE=${DEMO_BASE:-/cfw-mailbox/} react-router build && cp build/client/index.html build/client/404.html",
 		"cf-typegen": "wrangler types --strict-vars=false",
 		"postinstall": "wrangler types --strict-vars=false",
 		"test": "vitest run",
