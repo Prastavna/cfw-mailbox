@@ -5,3 +5,6 @@
 allowBuilds:
   esbuild: true
   workerd: true
+  # Pulled in by `agents` (via mimetext → @babel/runtime-corejs3). Its install script only
+  # prints a funding message, so it's denied rather than run.
+  core-js-pure: false

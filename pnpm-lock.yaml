@@ -256,9 +256,6 @@ importers:
       tw-animate-css:
         specifier: ^1.4.0
         version: 1.4.0
-      workers-ai-provider:
-        specifier: 4.0.1
-        version: 4.0.1(@ai-sdk/anthropic@4.0.94(zod@4.6.7))(@ai-sdk/google@4.0.109(zod@4.6.7))(@ai-sdk/openai@4.0.106(zod@4.6.7))(@ai-sdk/provider@4.0.35)(ai@7.0.159(zod@4.6.7))
       zod:
         specifier: ^4.6.7
         version: 4.6.7
@@ -4196,25 +4193,6 @@ packages:
     engines: {node: '>=16'}
     hasBin: true
 
-  workers-ai-provider@4.0.1:
-    resolution: {integrity: sha512-PDznmd1A6g058FGWDjQ6Io1LlV51gGQ7pze7y/rnsdxLnNgjqQf8zRHoKjJv3RPoU5cU4QT4TX7lZ2kxX2x73g==}
-    deprecated: |-
-      Deprecated. Use createAI from agents/models/ai-sdk, or
-       ai-search-provider for AI Search: https://developers.cloudflare.com/agents/models/ai-sdk/
-    peerDependencies:
-      '@ai-sdk/anthropic': ^4.0.0
-      '@ai-sdk/google': ^4.0.0
-      '@ai-sdk/openai': ^4.0.0
-      '@ai-sdk/provider': ^4.0.0
-      ai: ^7.0.0
-    peerDependenciesMeta:
-      '@ai-sdk/anthropic':
-        optional: true
-      '@ai-sdk/google':
-        optional: true
-      '@ai-sdk/openai':
-        optional: true
-
   wrangler@4.156.0:
     resolution: {integrity: sha512-kVLAShuLiNgE3jcrmXcymDf/iPKDPrSxACe5ueugW/33HeNB9E9CkKYchudCeBwgmsnl4k+1zt4NO7vqb/fRuQ==}
     engines: {node: '>=22.0.0'}
@@ -8076,15 +8054,6 @@ snapshots:
       '@cloudflare/workerd-linux-64': 1.20261023.1
       '@cloudflare/workerd-linux-arm64': 1.20261023.1
       '@cloudflare/workerd-windows-64': 1.20261023.1
-
-  workers-ai-provider@4.0.1(@ai-sdk/anthropic@4.0.94(zod@4.6.7))(@ai-sdk/google@4.0.109(zod@4.6.7))(@ai-sdk/openai@4.0.106(zod@4.6.7))(@ai-sdk/provider@4.0.35)(ai@7.0.159(zod@4.6.7)):
-    dependencies:
-      '@ai-sdk/provider': 4.0.35
-      ai: 7.0.159(zod@4.6.7)
-    optionalDependencies:
-      '@ai-sdk/anthropic': 4.0.94(zod@4.6.7)
-      '@ai-sdk/google': 4.0.109(zod@4.6.7)
-      '@ai-sdk/openai': 4.0.106(zod@4.6.7)
 
   wrangler@4.156.0(@types/node@22.20.5):
     dependencies:
