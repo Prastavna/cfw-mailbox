@@ -1,4 +1,10 @@
 import { DurableObject } from "cloudflare:workers";
+import {
+	ALL_MAIL,
+	MANAGED_LABELS,
+	type MessageLabelChange,
+	type ModifyResult,
+} from "../../shared/api";
 import type {
 	AttachmentInfo,
 	AuthResults,
@@ -12,6 +18,7 @@ import type {
 } from "../../shared/api";
 import { isReplySubject, makeSnippet, normalizeSubject } from "../email/parse";
 import { runMigrations } from "../lib/migrate";
+import { fail, ok, type Result } from "../lib/result";
 import { MAILBOX_MIGRATIONS, SystemLabel } from "./schema";
 
 /** Everything needed to store one message. Blobs are already in R2. */
@@ -124,6 +131,24 @@ function decodeCursor(cursor: string | undefined): { at: number; id: string } | 
 	const at = Number(cursor.slice(0, sep));
 	return sep > 0 && Number.isFinite(at) ? { at, id: cursor.slice(sep + 1) } : null;
 }
+
+/**
+ * Threads in Trash or Spam are hidden from every other view, like Gmail.
+ * Spam also hides trashed threads; Trash shows everything trashed.
+ */
+function hiddenLabelsFor(labelId: string): string[] {
+	if (labelId === SystemLabel.TRASH) return [];
+	if (labelId === SystemLabel.SPAM) return [SystemLabel.TRASH];
+	return [SystemLabel.TRASH, SystemLabel.SPAM];
+}
+
+/** Labels that apply to one message of a thread (the newest) rather than all of them. */
+const LATEST_MESSAGE_ONLY = new Set<string>([SystemLabel.STARRED, SystemLabel.UNREAD]);
+
+/** Names user labels can't take, so they don't look like system folders. */
+const RESERVED_LABEL_NAMES = new Set(["inbox", "sent", "draft", "drafts", "spam", "trash", "starred", "important", "unread", "all mail", "all"]);
+
+const MAX_BATCH = 500;
 
 /**
  * One instance per mailbox, addressed by the registry's mailbox ID. Holds
@@ -320,37 +345,56 @@ export class MailboxDO extends DurableObject<Env> {
 	// ---- Reading -----------------------------------------------------------
 
 	async listLabels(): Promise<Label[]> {
+		// A thread counts towards a label unless it's hidden there (see hiddenLabelsFor).
+		const visible = `NOT EXISTS (
+			SELECT 1 FROM thread_labels x WHERE x.thread_id = tl.thread_id AND (
+				(l.id NOT IN ('TRASH', 'SPAM') AND x.label_id IN ('TRASH', 'SPAM'))
+				OR (l.id = 'SPAM' AND x.label_id = 'TRASH')))`;
 		return this.sql
 			.exec<{ id: string; name: string; type: "system" | "user"; color: string | null; total: number; unread: number }>(
 				`SELECT l.id, l.name, l.type, l.color,
-					(SELECT COUNT(*) FROM thread_labels tl WHERE tl.label_id = l.id) AS total,
+					(SELECT COUNT(*) FROM thread_labels tl WHERE tl.label_id = l.id AND ${visible}) AS total,
 					(SELECT COUNT(*) FROM thread_labels tl
 					 JOIN thread_labels u ON u.thread_id = tl.thread_id AND u.label_id = 'UNREAD'
-					 WHERE tl.label_id = l.id) AS unread
+					 WHERE tl.label_id = l.id AND ${visible}) AS unread
 				 FROM labels l
-				 ORDER BY l.type, l.name`,
+				 ORDER BY l.type, l.name COLLATE NOCASE`,
 			)
 			.toArray();
 	}
 
 	async listThreads(opts: { labelId: string; cursor?: string; limit: number }): Promise<ThreadPage> {
 		const cursor = decodeCursor(opts.cursor);
-		const rows = this.sql
-			.exec<ThreadRow>(
-				`SELECT ${THREAD_COLUMNS}
-				 FROM thread_labels tl JOIN threads t ON t.id = tl.thread_id
-				 WHERE tl.label_id = ?
-				   AND (? IS NULL OR tl.last_message_at < ? OR (tl.last_message_at = ? AND tl.thread_id < ?))
-				 ORDER BY tl.last_message_at DESC, tl.thread_id DESC
-				 LIMIT ?`,
-				opts.labelId,
-				cursor?.at ?? null,
-				cursor?.at ?? null,
-				cursor?.at ?? null,
-				cursor?.id ?? null,
-				opts.limit + 1,
-			)
-			.toArray();
+		const cursorArgs = [cursor?.at ?? null, cursor?.at ?? null, cursor?.at ?? null, cursor?.id ?? null];
+		const rows =
+			opts.labelId === ALL_MAIL
+				? this.sql
+						.exec<ThreadRow>(
+							`SELECT ${THREAD_COLUMNS} FROM threads t
+							 WHERE (? IS NULL OR t.last_message_at < ? OR (t.last_message_at = ? AND t.id < ?))
+							   AND NOT EXISTS (SELECT 1 FROM thread_labels x WHERE x.thread_id = t.id AND x.label_id IN ('TRASH', 'SPAM'))
+							 ORDER BY t.last_message_at DESC, t.id DESC
+							 LIMIT ?`,
+							...cursorArgs,
+							opts.limit + 1,
+						)
+						.toArray()
+				: this.sql
+						.exec<ThreadRow>(
+							`SELECT ${THREAD_COLUMNS}
+							 FROM thread_labels tl JOIN threads t ON t.id = tl.thread_id
+							 WHERE tl.label_id = ?
+							   AND (? IS NULL OR tl.last_message_at < ? OR (tl.last_message_at = ? AND tl.thread_id < ?))
+							   AND NOT EXISTS (SELECT 1 FROM thread_labels x
+							                   WHERE x.thread_id = tl.thread_id AND x.label_id IN (SELECT value FROM json_each(?)))
+							 ORDER BY tl.last_message_at DESC, tl.thread_id DESC
+							 LIMIT ?`,
+							opts.labelId,
+							...cursorArgs,
+							JSON.stringify(hiddenLabelsFor(opts.labelId)),
+							opts.limit + 1,
+						)
+						.toArray();
 		const page = rows.slice(0, opts.limit);
 		const last = page.at(-1);
 		return {
@@ -429,6 +473,183 @@ export class MailboxDO extends DurableObject<Env> {
 			this.sql.exec<{ raw_key: string | null }>("SELECT raw_key FROM messages WHERE id = ?", messageId).toArray()[0]?.raw_key ??
 			null
 		);
+	}
+
+	// ---- Actions -------------------------------------------------------------
+
+	/**
+	 * Adds/removes labels on whole threads (archive, trash, read, star, …).
+	 * STARRED and UNREAD are added to the newest message only, like Gmail;
+	 * everything else applies to every message.
+	 */
+	async modifyThreads(threadIds: string[], addLabelIds: string[], removeLabelIds: string[]): Promise<Result<ModifyResult>> {
+		const invalid = this.checkLabelIds([...addLabelIds, ...removeLabelIds]);
+		if (invalid) return invalid;
+		if (threadIds.length > MAX_BATCH) return fail("invalid", `At most ${MAX_BATCH} threads at a time`);
+
+		const rows = this.sql
+			.exec<{ id: string; thread_id: string }>(
+				`SELECT id, thread_id FROM messages WHERE thread_id IN (SELECT value FROM json_each(?))
+				 ORDER BY thread_id, received_at, sent_at`,
+				JSON.stringify(threadIds),
+			)
+			.toArray();
+		const latest = new Map<string, string>();
+		for (const r of rows) latest.set(r.thread_id, r.id);
+
+		const entries = rows.map((r) => ({
+			messageId: r.id,
+			addLabelIds: addLabelIds.filter((l) => !LATEST_MESSAGE_ONLY.has(l) || latest.get(r.thread_id) === r.id),
+			removeLabelIds,
+		}));
+		return ok(this.applyChanges(entries));
+	}
+
+	/** Adds/removes labels on individual messages; also used to undo an earlier change exactly. */
+	async modifyMessages(changes: MessageLabelChange[]): Promise<Result<ModifyResult>> {
+		const invalid = this.checkLabelIds(changes.flatMap((c) => [...c.addLabelIds, ...c.removeLabelIds]));
+		if (invalid) return invalid;
+		if (changes.length > MAX_BATCH * 20) return fail("invalid", "Too many changes at once");
+		return ok(this.applyChanges(changes));
+	}
+
+	private checkLabelIds(ids: string[]): Result<never> | null {
+		const unique = [...new Set(ids)];
+		if (unique.some((id) => (MANAGED_LABELS as readonly string[]).includes(id))) {
+			return fail("invalid", "Sent and Drafts are managed automatically");
+		}
+		const found = this.sql
+			.exec<{ n: number }>("SELECT COUNT(*) AS n FROM labels WHERE id IN (SELECT value FROM json_each(?))", JSON.stringify(unique))
+			.one().n;
+		return found === unique.length ? null : fail("invalid", "Unknown label");
+	}
+
+	/** Applies label changes in one transaction and reports only what actually changed. */
+	private applyChanges(entries: MessageLabelChange[]): ModifyResult {
+		const result = this.ctx.storage.transactionSync(() => {
+			const applied: MessageLabelChange[] = [];
+			const threadIds = new Set<string>();
+			for (const e of entries) {
+				const threadId = this.sql
+					.exec<{ thread_id: string }>("SELECT thread_id FROM messages WHERE id = ?", e.messageId)
+					.toArray()[0]?.thread_id;
+				if (!threadId) continue;
+				const added = e.addLabelIds.filter(
+					(l) =>
+						this.sql.exec("INSERT OR IGNORE INTO message_labels (message_id, label_id) VALUES (?, ?)", e.messageId, l)
+							.rowsWritten > 0,
+				);
+				const removed = e.removeLabelIds.filter(
+					(l) =>
+						this.sql.exec("DELETE FROM message_labels WHERE message_id = ? AND label_id = ?", e.messageId, l).rowsWritten > 0,
+				);
+				if (added.length || removed.length) {
+					applied.push({ messageId: e.messageId, addLabelIds: added, removeLabelIds: removed });
+					threadIds.add(threadId);
+				}
+			}
+			for (const id of threadIds) this.refreshThreadLabels(id);
+			return { changes: applied, threadIds: [...threadIds] };
+		});
+		if (result.threadIds.length) this.broadcast({ type: "threads.changed", threadIds: result.threadIds });
+		return result;
+	}
+
+	/**
+	 * Permanently deletes threads that are in Trash or Spam (others are
+	 * skipped), including their files in R2.
+	 */
+	async deleteThreads(threadIds: string[]): Promise<Result<{ threadIds: string[] }>> {
+		if (threadIds.length > MAX_BATCH) return fail("invalid", `At most ${MAX_BATCH} threads at a time`);
+		const { ids, keys } = this.ctx.storage.transactionSync(() => {
+			const ids = this.sql
+				.exec<{ thread_id: string }>(
+					`SELECT DISTINCT thread_id FROM thread_labels
+					 WHERE thread_id IN (SELECT value FROM json_each(?)) AND label_id IN ('TRASH', 'SPAM')`,
+					JSON.stringify(threadIds),
+				)
+				.toArray()
+				.map((r) => r.thread_id);
+			if (!ids.length) return { ids, keys: [] as string[] };
+			const json = JSON.stringify(ids);
+			const inThreads = "SELECT id FROM messages WHERE thread_id IN (SELECT value FROM json_each(?))";
+			const keys = [
+				...this.sql
+					.exec<{ k: string }>(
+						`SELECT raw_key AS k FROM messages WHERE thread_id IN (SELECT value FROM json_each(?)) AND raw_key IS NOT NULL
+						 UNION ALL SELECT html_key FROM messages WHERE thread_id IN (SELECT value FROM json_each(?)) AND html_key IS NOT NULL
+						 UNION ALL SELECT r2_key FROM attachments WHERE message_id IN (${inThreads})`,
+						json,
+						json,
+						json,
+					)
+					.toArray()
+					.map((r) => r.k),
+			];
+			// Children first, so this works whether or not foreign keys are enforced.
+			this.sql.exec(`DELETE FROM attachments WHERE message_id IN (${inThreads})`, json);
+			this.sql.exec(`DELETE FROM message_labels WHERE message_id IN (${inThreads})`, json);
+			this.sql.exec("DELETE FROM messages WHERE thread_id IN (SELECT value FROM json_each(?))", json);
+			this.sql.exec("DELETE FROM thread_labels WHERE thread_id IN (SELECT value FROM json_each(?))", json);
+			this.sql.exec("DELETE FROM threads WHERE id IN (SELECT value FROM json_each(?))", json);
+			return { ids, keys };
+		});
+
+		for (let i = 0; i < keys.length; i += 1000) await this.env.BUCKET.delete(keys.slice(i, i + 1000));
+		if (ids.length) this.broadcast({ type: "threads.changed", threadIds: ids });
+		return ok({ threadIds: ids });
+	}
+
+	// ---- Labels --------------------------------------------------------------
+
+	private labelNameProblem(name: string, exceptId?: string): Result<never> | null {
+		if (RESERVED_LABEL_NAMES.has(name.toLowerCase())) return fail("invalid", `"${name}" is reserved`);
+		const clash = this.sql
+			.exec<{ id: string }>("SELECT id FROM labels WHERE name = ? COLLATE NOCASE", name)
+			.toArray()
+			.find((r) => r.id !== exceptId);
+		return clash ? fail("conflict", `A label named "${name}" already exists`) : null;
+	}
+
+	async createLabel(name: string, color: string | null): Promise<Result<Label>> {
+		const problem = this.labelNameProblem(name);
+		if (problem) return problem;
+		const id = crypto.randomUUID();
+		this.sql.exec(
+			"INSERT INTO labels (id, name, type, color, created_at) VALUES (?, ?, 'user', ?, ?)",
+			id,
+			name,
+			color,
+			Date.now(),
+		);
+		this.broadcast({ type: "threads.changed", threadIds: [] });
+		return ok({ id, name, type: "user", color, total: 0, unread: 0 });
+	}
+
+	async updateLabel(id: string, patch: { name?: string; color?: string | null }): Promise<Result<null>> {
+		const label = this.sql.exec<{ type: string }>("SELECT type FROM labels WHERE id = ?", id).toArray()[0];
+		if (!label || label.type !== "user") return fail("not_found", "Label not found");
+		if (patch.name !== undefined) {
+			const problem = this.labelNameProblem(patch.name, id);
+			if (problem) return problem;
+			this.sql.exec("UPDATE labels SET name = ? WHERE id = ?", patch.name, id);
+		}
+		if (patch.color !== undefined) this.sql.exec("UPDATE labels SET color = ? WHERE id = ?", patch.color, id);
+		this.broadcast({ type: "threads.changed", threadIds: [] });
+		return ok(null);
+	}
+
+	/** Removes a user label from every message, then deletes it. Mail itself is untouched. */
+	async deleteLabel(id: string): Promise<Result<null>> {
+		const label = this.sql.exec<{ type: string }>("SELECT type FROM labels WHERE id = ?", id).toArray()[0];
+		if (!label || label.type !== "user") return fail("not_found", "Label not found");
+		this.ctx.storage.transactionSync(() => {
+			this.sql.exec("DELETE FROM message_labels WHERE label_id = ?", id);
+			this.sql.exec("DELETE FROM thread_labels WHERE label_id = ?", id);
+			this.sql.exec("DELETE FROM labels WHERE id = ?", id);
+		});
+		this.broadcast({ type: "threads.changed", threadIds: [] });
+		return ok(null);
 	}
 
 	// ---- Live updates ------------------------------------------------------

@@ -3,6 +3,7 @@ import { useState } from "react";
 import { isRouteErrorResponse, Links, Meta, Outlet, Scripts, ScrollRestoration } from "react-router";
 
 import type { Route } from "./+types/root";
+import { Toaster } from "./components/ui/sonner";
 import "./app.css";
 
 // Applied before first paint so dark-mode users don't see a white flash.
@@ -34,6 +35,7 @@ export default function App() {
 	return (
 		<QueryClientProvider client={queryClient}>
 			<Outlet />
+			<Toaster position="bottom-left" />
 		</QueryClientProvider>
 	);
 }

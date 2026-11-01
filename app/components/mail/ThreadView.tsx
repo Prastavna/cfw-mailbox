@@ -1,6 +1,6 @@
 import { ArrowLeft, ChevronDown, ChevronUp, EllipsisVertical, FileCode, Paperclip, Star } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router";
+import { useEffect, useRef, useState } from "react";
+import { Link, useNavigate } from "react-router";
 import type { Label, MessageDetail } from "../../../shared/api";
 import { Avatar, AvatarFallback } from "~/components/ui/avatar";
 import { Badge } from "~/components/ui/badge";
@@ -12,6 +12,7 @@ import {
 	DropdownMenuTrigger,
 } from "~/components/ui/dropdown-menu";
 import { Skeleton } from "~/components/ui/skeleton";
+import { Actions, type MailActions } from "~/lib/actions";
 import { rawMessageUrl, useThread } from "~/lib/api";
 import { visibleLabelChips } from "~/lib/folders";
 import {
@@ -24,6 +25,7 @@ import {
 	recipientsSummary,
 } from "~/lib/format";
 import { cn } from "~/lib/utils";
+import { ActionBar } from "./ActionBar";
 import { AttachmentList } from "./AttachmentList";
 import { EmailBody } from "./EmailBody";
 
@@ -34,28 +36,31 @@ interface ThreadViewProps {
 	backHref: string;
 	currentLabelId: string;
 	labels: Label[] | undefined;
+	actions: MailActions;
 }
 
 /** How many collapsed messages in the middle of a thread before they fold into "N older messages". */
 const FOLD_THRESHOLD = 3;
 
-export function ThreadView({ mailboxId, mailboxAddress, threadId, backHref, currentLabelId, labels }: ThreadViewProps) {
+export function ThreadView({ mailboxId, mailboxAddress, threadId, backHref, currentLabelId, labels, actions }: ThreadViewProps) {
 	const { data, isPending, isError, error } = useThread(mailboxId, threadId);
 	const messages = data?.messages ?? [];
-
-	// Gmail expands the newest message and any unread ones.
-	const initiallyExpanded = useMemo(() => {
-		const ids = new Set(messages.filter((m) => m.labelIds.includes("UNREAD")).map((m) => m.id));
-		const last = messages.at(-1);
-		if (last) ids.add(last.id);
-		return ids;
-	}, [messages]);
+	const navigate = useNavigate();
 	const [expanded, setExpanded] = useState<Set<string>>(new Set());
 	const [unfolded, setUnfolded] = useState(false);
+	const initialised = useRef<string | null>(null);
+
+	// Gmail expands the newest message and any unread ones, then marks the conversation read.
 	useEffect(() => {
-		setExpanded(initiallyExpanded);
+		if (!data || initialised.current === threadId) return;
+		initialised.current = threadId;
+		const ids = new Set(data.messages.filter((m) => m.labelIds.includes("UNREAD")).map((m) => m.id));
+		const last = data.messages.at(-1);
+		if (last) ids.add(last.id);
+		setExpanded(ids);
 		setUnfolded(false);
-	}, [threadId, initiallyExpanded]);
+		if (data.thread.unread) actions.modify([threadId], Actions.markRead);
+	}, [data, threadId, actions]);
 
 	useEffect(() => {
 		if (data) document.title = `${data.thread.subject || "(no subject)"} - ${mailboxAddress} - Mail`;
@@ -82,6 +87,15 @@ export function ThreadView({ mailboxId, mailboxAddress, threadId, backHref, curr
 						<ArrowLeft className="size-4" />
 					</Link>
 				</Button>
+				{data && (
+					<ActionBar
+						targets={[data.thread]}
+						currentLabelId={currentLabelId}
+						labels={labels}
+						actions={actions}
+						onDone={(effect) => effect !== "changed" && navigate(backHref)}
+					/>
+				)}
 			</div>
 
 			<div className="min-h-0 flex-1 overflow-y-auto">
@@ -127,6 +141,9 @@ export function ThreadView({ mailboxId, mailboxAddress, threadId, backHref, curr
 									message={m}
 									expanded={expanded.has(m.id)}
 									onToggle={() => toggle(m.id)}
+									onToggleStar={() =>
+										actions.modifyMessage(m.id, m.labelIds.includes("STARRED") ? Actions.unstar : Actions.star)
+									}
 									isLast={i === messages.length - 1}
 								/>
 							);
@@ -145,9 +162,10 @@ interface MessageCardProps {
 	expanded: boolean;
 	isLast: boolean;
 	onToggle: () => void;
+	onToggleStar: () => void;
 }
 
-function MessageCard({ mailboxId, me, message, expanded, isLast, onToggle }: MessageCardProps) {
+function MessageCard({ mailboxId, me, message, expanded, isLast, onToggle, onToggleStar }: MessageCardProps) {
 	const [showDetails, setShowDetails] = useState(false);
 	const starred = message.labelIds.includes("STARRED");
 	const hasFiles = message.attachments.some((a) => a.disposition === "attachment");
@@ -192,7 +210,16 @@ function MessageCard({ mailboxId, me, message, expanded, isLast, onToggle }: Mes
 						<span className="text-muted-foreground hidden shrink-0 text-xs sm:inline" title={formatFullDate(message.sentAt)}>
 							{formatMessageDate(message.sentAt)}
 						</span>
-						{starred && <Star className="size-4 shrink-0 fill-amber-400 text-amber-400" aria-label="Starred" />}
+						<Button
+							variant="ghost"
+							size="icon-sm"
+							className="-mt-1 rounded-full"
+							onClick={onToggleStar}
+							aria-label={starred ? "Starred" : "Not starred"}
+							aria-pressed={starred}
+						>
+							<Star className={cn("size-4", starred ? "fill-amber-400 text-amber-400" : "text-muted-foreground")} />
+						</Button>
 						<DropdownMenu>
 							<DropdownMenuTrigger asChild>
 								<Button variant="ghost" size="icon-sm" className="-mt-1 rounded-full" aria-label="More">

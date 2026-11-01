@@ -5,6 +5,8 @@ import { Sidebar } from "~/components/mail/Sidebar";
 import { Sheet, SheetContent, SheetTitle } from "~/components/ui/sheet";
 import { TooltipProvider } from "~/components/ui/tooltip";
 import { useMediaQuery } from "~/hooks/use-media-query";
+import type { MailboxAccess, Me } from "../../shared/api";
+import { useMailActions } from "~/lib/actions";
 import { rememberMailbox, useLabels, useMailboxEvents, useMe } from "~/lib/api";
 import type { MailboxContext } from "~/lib/mailbox-context";
 import { cn } from "~/lib/utils";
@@ -29,12 +31,12 @@ export default function MailboxLayout() {
 			</FullPageMessage>
 		);
 	}
-	return <MailboxFrame key={mailbox.id} context={{ me: me!, mailbox, labels: undefined }} />;
+	return <MailboxFrame key={mailbox.id} me={me!} mailbox={mailbox} />;
 }
 
-function MailboxFrame({ context }: { context: MailboxContext }) {
-	const { mailbox } = context;
+function MailboxFrame({ me, mailbox }: { me: Me; mailbox: MailboxAccess }) {
 	const { data: labels } = useLabels(mailbox.id);
+	const actions = useMailActions(mailbox.id);
 	const live = useMailboxEvents(mailbox.id);
 	const desktop = useMediaQuery("(min-width: 768px)");
 	const [collapsed, setCollapsed] = useState(false);
@@ -66,19 +68,19 @@ function MailboxFrame({ context }: { context: MailboxContext }) {
 	return (
 		<TooltipProvider delayDuration={400}>
 			<div className="flex h-svh flex-col bg-mail-canvas text-foreground">
-				<Header me={context.me} mailbox={mailbox} live={live} onToggleSidebar={toggleSidebar} />
+				<Header me={me} mailbox={mailbox} live={live} onToggleSidebar={toggleSidebar} />
 				<div className="flex min-h-0 flex-1">
 					<aside className={cn("hidden shrink-0 overflow-y-auto md:block", collapsed ? "w-[72px]" : "w-64")}>
-						<Sidebar mailboxId={mailbox.id} labels={labels} collapsed={collapsed} />
+						<Sidebar mailboxId={mailbox.id} labels={labels} collapsed={collapsed} actions={actions} />
 					</aside>
 					<Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
 						<SheetContent side="left" className="w-72 bg-mail-canvas p-0 pt-4">
 							<SheetTitle className="sr-only">Folders</SheetTitle>
-							<Sidebar mailboxId={mailbox.id} labels={labels} collapsed={false} onNavigate={() => setMobileOpen(false)} />
+							<Sidebar mailboxId={mailbox.id} labels={labels} collapsed={false} actions={actions} onNavigate={() => setMobileOpen(false)} />
 						</SheetContent>
 					</Sheet>
 					<main className="mb-0 min-w-0 flex-1 overflow-hidden bg-mail-surface md:mr-4 md:mb-4 md:rounded-2xl">
-						<Outlet context={{ ...context, labels } satisfies MailboxContext} />
+						<Outlet context={{ me, mailbox, labels, actions } satisfies MailboxContext} />
 					</main>
 				</div>
 			</div>

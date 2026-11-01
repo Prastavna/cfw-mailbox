@@ -1,5 +1,5 @@
 import { Mail } from "lucide-react";
-import { Navigate } from "react-router";
+import { Link, Navigate } from "react-router";
 import { lastMailbox, useMe } from "~/lib/api";
 import type { Route } from "./+types/home";
 
@@ -26,9 +26,17 @@ export default function Home() {
 				<div className="max-w-md space-y-2">
 					<p className="font-medium">Signed in as {me.email}</p>
 					<p className="text-muted-foreground text-sm">
-						{me.isAdmin
-							? "There are no mailboxes yet. Add a domain and a mailbox through the admin API (see the README)."
-							: "You don't have access to any mailboxes yet. Ask an administrator to add you."}
+						{me.isAdmin ? (
+							<>
+								There are no mailboxes yet.{" "}
+								<Link to="/admin" className="text-primary underline">
+									Add a domain and a mailbox
+								</Link>
+								.
+							</>
+						) : (
+							"You don't have access to any mailboxes yet. Ask an administrator to add you."
+						)}
 					</p>
 				</div>
 			)}

@@ -1,6 +1,6 @@
 import { type Context, Hono } from "hono";
 import { z } from "zod";
-import type { MailboxRole, Me, ThreadDetail, ThreadPage } from "../../shared/api";
+import type { Label, MailboxRole, Me, ModifyResult, ThreadDetail, ThreadPage } from "../../shared/api";
 import { domainOf, isValidAddress, isValidDomain } from "../../shared/address";
 import { authenticate, type Identity } from "../auth/access";
 import { HttpError } from "../lib/http";
@@ -26,6 +26,35 @@ const ListThreadsQuery = z.object({
 	cursor: z.string().max(200).optional(),
 	limit: z.coerce.number().int().min(1).max(100).default(50),
 }).transform(({ label, ...rest }) => ({ labelId: label, ...rest }));
+
+const Id = z.string().min(1).max(100);
+const LabelIds = z.array(Id).max(20).default([]);
+const ModifyThreadsBody = z.object({
+	threadIds: z.array(Id).min(1).max(500),
+	addLabelIds: LabelIds,
+	removeLabelIds: LabelIds,
+});
+const ModifyMessagesBody = z.object({
+	changes: z
+		.array(z.object({ messageId: Id, addLabelIds: LabelIds, removeLabelIds: LabelIds }))
+		.min(1)
+		.max(10_000),
+});
+const DeleteThreadsBody = z.object({ threadIds: z.array(Id).min(1).max(500) });
+const LabelName = z
+	.string()
+	.trim()
+	.min(1, "Label name is required")
+	.max(100, "Label names can be at most 100 characters")
+	.refine((n) => !/[\u0000-\u001f]/.test(n), "Label name contains invalid characters");
+const LabelColor = z
+	.string()
+	.regex(/^#[0-9a-f]{6}$/i, "Colour must look like #1a73e8")
+	.nullable();
+const CreateLabelBody = z.object({ name: LabelName, color: LabelColor.default(null) });
+const UpdateLabelBody = z
+	.object({ name: LabelName.optional(), color: LabelColor.optional() })
+	.refine((b) => b.name !== undefined || b.color !== undefined, "Nothing to update");
 
 /** Mail content is attacker-controlled: never let the browser sniff or run it on our origin. */
 const UNTRUSTED_CONTENT_HEADERS = {
@@ -151,6 +180,32 @@ mailbox.use("*", async (c, next) => {
 const mailboxStub = (c: Context<AppEnv>) => getMailbox(c.env, c.req.param("mailboxId")!);
 
 mailbox.get("/labels", async (c) => c.json(await mailboxStub(c).listLabels()));
+
+mailbox.post("/labels", async (c) => {
+	const { name, color } = await parseBody(c.req.raw, CreateLabelBody);
+	return c.json<Label>(unwrap(await mailboxStub(c).createLabel(name, color)), 201);
+});
+mailbox.patch("/labels/:labelId", async (c) => {
+	unwrap(await mailboxStub(c).updateLabel(c.req.param("labelId"), await parseBody(c.req.raw, UpdateLabelBody)));
+	return c.body(null, 204);
+});
+mailbox.delete("/labels/:labelId", async (c) => {
+	unwrap(await mailboxStub(c).deleteLabel(c.req.param("labelId")));
+	return c.body(null, 204);
+});
+
+mailbox.post("/threads/modify", async (c) => {
+	const body = await parseBody(c.req.raw, ModifyThreadsBody);
+	return c.json<ModifyResult>(unwrap(await mailboxStub(c).modifyThreads(body.threadIds, body.addLabelIds, body.removeLabelIds)));
+});
+mailbox.post("/messages/modify", async (c) => {
+	const { changes } = await parseBody(c.req.raw, ModifyMessagesBody);
+	return c.json<ModifyResult>(unwrap(await mailboxStub(c).modifyMessages(changes)));
+});
+mailbox.post("/threads/delete", async (c) => {
+	const { threadIds } = await parseBody(c.req.raw, DeleteThreadsBody);
+	return c.json(unwrap(await mailboxStub(c).deleteThreads(threadIds)));
+});
 
 mailbox.get("/threads", async (c) => {
 	const q = ListThreadsQuery.safeParse(c.req.query());

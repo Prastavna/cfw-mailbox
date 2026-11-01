@@ -1,4 +1,4 @@
-import { Check } from "lucide-react";
+import { Check, Settings } from "lucide-react";
 import { useNavigate } from "react-router";
 import type { MailboxAccess, Me } from "../../../shared/api";
 import { Avatar, AvatarFallback } from "~/components/ui/avatar";
@@ -64,6 +64,14 @@ export function AccountSwitcher({ me, current }: { me: Me; current: MailboxAcces
 							))}
 					</DropdownMenuGroup>
 				))}
+				{me.isAdmin && (
+					<>
+						<DropdownMenuSeparator />
+						<DropdownMenuItem onSelect={() => navigate("/admin")}>
+							<Settings className="size-4" /> Manage mailboxes
+						</DropdownMenuItem>
+					</>
+				)}
 			</DropdownMenuContent>
 		</DropdownMenu>
 	);

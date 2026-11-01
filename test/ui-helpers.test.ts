@@ -61,3 +61,16 @@ describe("folders", () => {
 		expect(visibleLabelChips(["INBOX", "STARRED"], [userLabel], "STARRED")).toEqual([{ id: "INBOX", name: "Inbox", color: null }]);
 	});
 });
+
+describe("optimistic list membership", () => {
+	it("mirrors the server's view rules", async () => {
+		const { belongsTo } = await import("../app/lib/actions");
+		expect(belongsTo("INBOX", ["INBOX", "UNREAD"])).toBe(true);
+		expect(belongsTo("INBOX", ["UNREAD"])).toBe(false);
+		expect(belongsTo("STARRED", ["STARRED", "TRASH"])).toBe(false);
+		expect(belongsTo("TRASH", ["STARRED", "TRASH"])).toBe(true);
+		expect(belongsTo("SPAM", ["SPAM", "TRASH"])).toBe(false);
+		expect(belongsTo("ALL", ["IMPORTANT"])).toBe(true);
+		expect(belongsTo("ALL", ["SPAM"])).toBe(false);
+	});
+});

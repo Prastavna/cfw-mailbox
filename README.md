@@ -7,7 +7,7 @@ Self-hosted, Gmail-style webmail that runs entirely on your own Cloudflare accou
 - **Many users, many domains.** Admins add domains and mailboxes and grant people access. Each user switches between the mailboxes they're allowed to open.
 - **Sign-in** uses [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/). The Worker verifies every request's Access token itself and enforces per-mailbox permissions.
 
-> Status: **Phase 2 (reading UI)**. Mail is received and threaded, and the Gmail-style web app shows it: folder sidebar, account switcher, thread list, conversation view and live updates. Next: actions such as archive, read/unread, star and labels (Phase 3), then writing mail (Phase 4).
+> Status: **Phase 3 (actions)**. Mail is received, threaded and readable, and you can archive, delete, report spam, mark read or unread, star, apply labels and undo each of these. Admins manage domains, mailboxes and members at `/admin`. Next: writing mail (Phase 4).
 
 ## Stack
 
@@ -39,7 +39,7 @@ cp .dev.vars.example .dev.vars   # set DEV_USER_EMAIL / ADMIN_EMAILS to your add
 pnpm dev
 ```
 
-`AUTH_MODE=dev` signs you in as `DEV_USER_EMAIL`, and only on `localhost`. Create a domain and a mailbox through the admin API:
+`AUTH_MODE=dev` signs you in as `DEV_USER_EMAIL`, and only on `localhost`. Open <http://localhost:5173/admin> to add a domain and a mailbox, or use the admin API:
 
 ```bash
 curl -X POST localhost:5173/api/admin/domains   -H 'content-type: application/json' -d '{"domain":"example.com"}'
@@ -72,6 +72,16 @@ Checks: `pnpm test`, `pnpm run typecheck`, `pnpm run build`.
 | GET | `/api/mailboxes/:id/messages/:messageId/attachments/:attachmentId[?inline=1]` | mailbox member |
 | GET | `/api/mailboxes/:id/messages/:messageId/raw` | mailbox member ("Show original") |
 | GET (WebSocket) | `/api/mailboxes/:id/events` | mailbox member: pushes `threads.changed` |
+| POST | `/api/mailboxes/:id/threads/modify` `{threadIds, addLabelIds, removeLabelIds}` | mailbox member |
+| POST | `/api/mailboxes/:id/messages/modify` `{changes: [{messageId, addLabelIds, removeLabelIds}]}` | mailbox member (per-message changes and undo) |
+| POST | `/api/mailboxes/:id/threads/delete` `{threadIds}` | mailbox member (Trash/Spam only, permanent) |
+| POST/PATCH/DELETE | `/api/mailboxes/:id/labels[/:labelId]` | mailbox member (user labels) |
+
+`threads?label=` takes a label ID or `ALL` (All Mail). Threads in Trash or Spam are hidden from every other view and from the counts.
+
+## Actions and undo
+
+Every action is a label change, as in Gmail. Archive removes `INBOX`; Delete adds `TRASH`; Report spam adds `SPAM`; read and unread toggle `UNREAD`. Star and unread apply to the newest message only; everything else applies to every message in the thread. The server answers with exactly which labels changed on which messages, so **Undo** sends that change back reversed and restores the previous state precisely. `SENT` and `DRAFT` are managed by the server and can't be changed by hand.
 
 ## How receiving works
 

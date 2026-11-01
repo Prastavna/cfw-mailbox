@@ -5,7 +5,7 @@ import { useMailboxContext } from "~/lib/mailbox-context";
 
 export default function ThreadRoute() {
 	const { folder = "", threadId = "" } = useParams();
-	const { mailbox, labels } = useMailboxContext();
+	const { mailbox, labels, actions } = useMailboxContext();
 	return (
 		<ThreadView
 			mailboxId={mailbox.id}
@@ -14,6 +14,7 @@ export default function ThreadRoute() {
 			backHref={`/mail/${mailbox.id}/${folder}`}
 			currentLabelId={resolveFolder(folder, labels)?.labelId ?? ""}
 			labels={labels}
+			actions={actions}
 		/>
 	);
 }

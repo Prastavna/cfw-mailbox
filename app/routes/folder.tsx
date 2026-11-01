@@ -6,7 +6,7 @@ import { useMailboxContext } from "~/lib/mailbox-context";
 
 export default function FolderRoute() {
 	const { folder = "" } = useParams();
-	const { mailbox, labels } = useMailboxContext();
+	const { mailbox, labels, actions } = useMailboxContext();
 	const resolved = resolveFolder(folder, labels);
 	const unread = labels?.find((l) => l.id === resolved?.labelId)?.unread ?? 0;
 
@@ -26,6 +26,7 @@ export default function FolderRoute() {
 			labelId={resolved.labelId}
 			folderName={resolved.name}
 			labels={labels}
+			actions={actions}
 		/>
 	);
 }

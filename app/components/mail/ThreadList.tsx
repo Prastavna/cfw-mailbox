@@ -1,16 +1,21 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { Paperclip, RefreshCw, Star } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { Archive, ChevronDown, Inbox, Mail, MailOpen, Paperclip, RefreshCw, Star, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router";
 import type { Label, ThreadSummary } from "../../../shared/api";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
+import { Checkbox } from "~/components/ui/checkbox";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "~/components/ui/dropdown-menu";
 import { Skeleton } from "~/components/ui/skeleton";
+import { Tooltip, TooltipContent, TooltipTrigger } from "~/components/ui/tooltip";
 import { useMediaQuery } from "~/hooks/use-media-query";
+import { Actions, type MailActions } from "~/lib/actions";
 import { useThreads } from "~/lib/api";
 import { visibleLabelChips } from "~/lib/folders";
 import { formatListDate, participantsLabel } from "~/lib/format";
 import { cn } from "~/lib/utils";
+import { ActionBar } from "./ActionBar";
 
 interface ThreadListProps {
 	mailboxId: string;
@@ -19,16 +24,29 @@ interface ThreadListProps {
 	labelId: string;
 	folderName: string;
 	labels: Label[] | undefined;
+	actions: MailActions;
 }
 
 const ROW_HEIGHT = 40;
 const ROW_HEIGHT_MOBILE = 76;
 
-export function ThreadList({ mailboxId, mailboxAddress, folderSegment, labelId, folderName, labels }: ThreadListProps) {
+type SelectPreset = "all" | "none" | "read" | "unread" | "starred" | "unstarred";
+
+export function ThreadList({ mailboxId, mailboxAddress, folderSegment, labelId, folderName, labels, actions }: ThreadListProps) {
 	const query = useThreads(mailboxId, labelId);
-	const threads = query.data?.pages.flatMap((p) => p.threads) ?? [];
+	const threads = useMemo(() => query.data?.pages.flatMap((p) => p.threads) ?? [], [query.data]);
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const mobile = useMediaQuery("(max-width: 767px)");
+	const [selected, setSelected] = useState<Set<string>>(new Set());
+
+	// Drop selections for threads that left the list (archived, deleted elsewhere…).
+	useEffect(() => {
+		setSelected((prev) => {
+			const present = new Set(threads.map((t) => t.id));
+			const next = new Set([...prev].filter((id) => present.has(id)));
+			return next.size === prev.size ? prev : next;
+		});
+	}, [threads]);
 
 	const virtualizer = useVirtualizer({
 		count: threads.length,
@@ -45,21 +63,85 @@ export function ThreadList({ mailboxId, mailboxAddress, folderSegment, labelId, 
 		if (lastIndex >= threads.length - 10 && query.hasNextPage && !query.isFetchingNextPage) query.fetchNextPage();
 	}, [lastIndex, threads.length, query]);
 
+	const selectedThreads = threads.filter((t) => selected.has(t.id));
+	const allSelected = threads.length > 0 && selectedThreads.length === threads.length;
+
+	const select = (preset: SelectPreset) => {
+		const match: Record<SelectPreset, (t: ThreadSummary) => boolean> = {
+			all: () => true,
+			none: () => false,
+			read: (t) => !t.unread,
+			unread: (t) => t.unread,
+			starred: (t) => t.labelIds.includes("STARRED"),
+			unstarred: (t) => !t.labelIds.includes("STARRED"),
+		};
+		setSelected(new Set(threads.filter(match[preset]).map((t) => t.id)));
+	};
+
+	const toggle = (id: string, on: boolean) =>
+		setSelected((prev) => {
+			const next = new Set(prev);
+			if (on) next.add(id);
+			else next.delete(id);
+			return next;
+		});
+
 	return (
 		<div className="flex h-full min-h-0 flex-col">
 			<div className="flex h-12 shrink-0 items-center gap-1 border-b px-2">
-				<Button
-					variant="ghost"
-					size="icon"
-					className="rounded-full"
-					aria-label="Refresh"
-					onClick={() => query.refetch()}
-					disabled={query.isFetching}
-				>
-					<RefreshCw className={cn("size-4", query.isFetching && "animate-spin")} />
-				</Button>
+				<div className="flex items-center rounded-md pl-2 hover:bg-mail-hover">
+					<Checkbox
+						checked={allSelected ? true : selectedThreads.length ? "indeterminate" : false}
+						onCheckedChange={(c) => select(c === true ? "all" : "none")}
+						aria-label={allSelected ? "Deselect all" : "Select all"}
+						disabled={threads.length === 0}
+					/>
+					<DropdownMenu>
+						<DropdownMenuTrigger asChild>
+							<Button variant="ghost" size="icon-xs" aria-label="Select…" disabled={threads.length === 0}>
+								<ChevronDown className="size-3" />
+							</Button>
+						</DropdownMenuTrigger>
+						<DropdownMenuContent align="start">
+							{(["all", "none", "read", "unread", "starred", "unstarred"] as const).map((p) => (
+								<DropdownMenuItem key={p} onSelect={() => select(p)} className="capitalize">
+									{p}
+								</DropdownMenuItem>
+							))}
+						</DropdownMenuContent>
+					</DropdownMenu>
+				</div>
+
+				{selectedThreads.length > 0 ? (
+					<ActionBar
+						targets={selectedThreads}
+						currentLabelId={labelId}
+						labels={labels}
+						actions={actions}
+						onDone={(effect) => effect === "removed" && setSelected(new Set())}
+					/>
+				) : (
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<Button
+								variant="ghost"
+								size="icon"
+								className="rounded-full"
+								aria-label="Refresh"
+								onClick={() => query.refetch()}
+								disabled={query.isFetching}
+							>
+								<RefreshCw className={cn("size-4", query.isFetching && "animate-spin")} />
+							</Button>
+						</TooltipTrigger>
+						<TooltipContent>Refresh</TooltipContent>
+					</Tooltip>
+				)}
+
 				<span className="text-muted-foreground ml-auto pr-2 text-xs tabular-nums">
-					{threads.length > 0 && `1–${threads.length}${query.hasNextPage ? " of many" : ""}`}
+					{selectedThreads.length > 0
+						? `${selectedThreads.length} selected`
+						: threads.length > 0 && `1–${threads.length}${query.hasNextPage ? " of many" : ""}`}
 				</span>
 			</div>
 
@@ -87,6 +169,10 @@ export function ThreadList({ mailboxId, mailboxAddress, folderSegment, labelId, 
 										href={`/mail/${mailboxId}/${folderSegment}/${thread.id}`}
 										me={mailboxAddress}
 										chips={visibleLabelChips(thread.labelIds, labels, labelId)}
+										selected={selected.has(thread.id)}
+										onSelect={(on) => toggle(thread.id, on)}
+										labelId={labelId}
+										actions={actions}
 									/>
 								</div>
 							);
@@ -104,66 +190,153 @@ interface RowProps {
 	href: string;
 	me: string;
 	chips: { id: string; name: string; color: string | null }[];
+	selected: boolean;
+	onSelect: (selected: boolean) => void;
+	labelId: string;
+	actions: MailActions;
 }
 
-function ThreadRow({ thread, href, me, chips }: RowProps) {
+function RowIconButton({ label, onClick, children }: { label: string; onClick: () => void; children: React.ReactNode }) {
+	return (
+		<Tooltip>
+			<TooltipTrigger asChild>
+				<button
+					type="button"
+					onClick={(e) => {
+						e.preventDefault();
+						e.stopPropagation();
+						onClick();
+					}}
+					className="flex size-8 items-center justify-center rounded-full text-foreground/70 hover:bg-mail-hover hover:text-foreground"
+					aria-label={label}
+				>
+					{children}
+				</button>
+			</TooltipTrigger>
+			<TooltipContent>{label}</TooltipContent>
+		</Tooltip>
+	);
+}
+
+function ThreadRow({ thread, href, me, chips, selected, onSelect, labelId, actions }: RowProps) {
 	const starred = thread.labelIds.includes("STARRED");
 	const sender = participantsLabel(thread.participants, me);
 	const date = formatListDate(thread.lastMessageAt);
 	const subject = thread.subject || "(no subject)";
+	const inTrashOrSpam = labelId === "TRASH" || labelId === "SPAM";
+	const ids = [thread.id];
+
+	const star = (
+		<button
+			type="button"
+			onClick={(e) => {
+				e.preventDefault();
+				actions.modify(ids, starred ? Actions.unstar : Actions.star);
+			}}
+			className="flex size-6 shrink-0 items-center justify-center rounded-full hover:bg-mail-hover"
+			aria-label={starred ? "Starred" : "Not starred"}
+			aria-pressed={starred}
+		>
+			<Star className={cn("size-4", starred ? "fill-amber-400 text-amber-400" : "text-muted-foreground/60")} />
+		</button>
+	);
 
 	return (
-		<Link
-			to={href}
+		<div
 			className={cn(
-				"group relative flex h-full items-center gap-3 border-b px-4 text-sm outline-none transition-shadow",
+				"group relative flex h-full items-center border-b text-sm transition-shadow",
 				"hover:z-10 hover:shadow-[inset_1px_0_0_#dadce0,inset_-1px_0_0_#dadce0,0_1px_2px_0_rgba(60,64,67,.3),0_1px_3px_1px_rgba(60,64,67,.15)]",
-				"focus-visible:bg-mail-active/50",
-				thread.unread ? "bg-mail-surface font-semibold" : "bg-mail-row-read text-foreground/80",
+				selected ? "bg-mail-active/60" : thread.unread ? "bg-mail-surface" : "bg-mail-row-read",
+				thread.unread ? "font-semibold" : "text-foreground/80",
 			)}
-			aria-label={`${thread.unread ? "Unread, " : ""}${sender}, ${subject}, ${date}`}
 		>
-			<Star
-				className={cn("size-4 shrink-0", starred ? "fill-amber-400 text-amber-400" : "text-transparent max-md:hidden")}
-				aria-hidden
-			/>
+			<div className="flex shrink-0 items-center gap-1 pl-2">
+				<Checkbox
+					checked={selected}
+					onCheckedChange={(c) => onSelect(c === true)}
+					aria-label={`Select conversation: ${subject}`}
+					className="mx-1.5"
+				/>
+				<span className="hidden md:block">{star}</span>
+			</div>
 
-			{/* Desktop: one line, Gmail style. */}
-			<span className="hidden w-[200px] shrink-0 truncate md:block">
-				{sender}
-				{thread.messageCount > 1 && <span className="ml-1 text-xs font-normal text-muted-foreground">{thread.messageCount}</span>}
-			</span>
-			<span className="hidden min-w-0 flex-1 items-center gap-1.5 md:flex">
-				{chips.map((c) => (
-					<Badge key={c.id} variant="secondary" className="h-5 shrink-0 rounded px-1.5 text-[11px] font-normal">
-						{c.name}
-					</Badge>
-				))}
-				<span className="truncate">
-					{subject}
-					<span className="font-normal text-muted-foreground"> - {thread.snippet}</span>
+			<Link
+				to={href}
+				className="flex h-full min-w-0 flex-1 items-center gap-3 pr-4 pl-2 outline-none focus-visible:bg-mail-active/50"
+				aria-label={`${thread.unread ? "Unread, " : ""}${sender}, ${subject}, ${date}`}
+			>
+				{/* Desktop: one line, Gmail style. */}
+				<span className="hidden w-[180px] shrink-0 truncate md:block">
+					{sender}
+					{thread.messageCount > 1 && <span className="ml-1 text-xs font-normal text-muted-foreground">{thread.messageCount}</span>}
 				</span>
-			</span>
-			{thread.hasAttachments && <Paperclip className="hidden size-4 shrink-0 text-muted-foreground md:block" aria-label="Has attachments" />}
-			<span className={cn("hidden w-16 shrink-0 text-right text-xs tabular-nums md:block", !thread.unread && "font-normal")}>{date}</span>
-
-			{/* Mobile: stacked. */}
-			<span className="flex min-w-0 flex-1 flex-col gap-0.5 md:hidden">
-				<span className="flex items-baseline gap-2">
-					<span className="flex-1 truncate">
-						{sender}
-						{thread.messageCount > 1 && <span className="ml-1 text-xs font-normal text-muted-foreground">{thread.messageCount}</span>}
+				<span className="hidden min-w-0 flex-1 items-center gap-1.5 md:flex">
+					{chips.map((c) => (
+						<Badge
+							key={c.id}
+							variant="secondary"
+							className="h-5 shrink-0 rounded px-1.5 text-[11px] font-normal"
+							style={c.color ? { backgroundColor: c.color, color: "#fff" } : undefined}
+						>
+							{c.name}
+						</Badge>
+					))}
+					<span className="truncate">
+						{subject}
+						<span className="font-normal text-muted-foreground"> - {thread.snippet}</span>
 					</span>
-					<span className={cn("shrink-0 text-xs", !thread.unread && "font-normal")}>{date}</span>
 				</span>
-				<span className="truncate">{subject}</span>
-				<span className="flex items-center gap-2 font-normal text-muted-foreground">
-					<span className="flex-1 truncate">{thread.snippet}</span>
-					{thread.hasAttachments && <Paperclip className="size-3.5 shrink-0" aria-label="Has attachments" />}
-					{starred && <Star className="size-3.5 shrink-0 fill-amber-400 text-amber-400" aria-label="Starred" />}
+				{thread.hasAttachments && <Paperclip className="hidden size-4 shrink-0 text-muted-foreground md:block" aria-label="Has attachments" />}
+				<span className={cn("hidden w-16 shrink-0 text-right text-xs tabular-nums md:block md:group-hover:invisible", !thread.unread && "font-normal")}>
+					{date}
 				</span>
-			</span>
-		</Link>
+
+				{/* Mobile: stacked. */}
+				<span className="flex min-w-0 flex-1 flex-col gap-0.5 md:hidden">
+					<span className="flex items-baseline gap-2">
+						<span className="flex-1 truncate">
+							{sender}
+							{thread.messageCount > 1 && <span className="ml-1 text-xs font-normal text-muted-foreground">{thread.messageCount}</span>}
+						</span>
+						<span className={cn("shrink-0 text-xs", !thread.unread && "font-normal")}>{date}</span>
+					</span>
+					<span className="truncate">{subject}</span>
+					<span className="flex items-center gap-2 font-normal text-muted-foreground">
+						<span className="flex-1 truncate">{thread.snippet}</span>
+						{thread.hasAttachments && <Paperclip className="size-3.5 shrink-0" aria-label="Has attachments" />}
+					</span>
+				</span>
+			</Link>
+			<span className="pr-2 md:hidden">{star}</span>
+
+			{/* Gmail's hover actions replace the date. */}
+			<div className="absolute top-0 right-2 hidden h-full items-center bg-inherit md:group-hover:flex">
+				{!inTrashOrSpam &&
+					(thread.labelIds.includes("INBOX") ? (
+						<RowIconButton label="Archive" onClick={() => actions.modify(ids, Actions.archive, { message: "Conversation archived." })}>
+							<Archive className="size-4" />
+						</RowIconButton>
+					) : (
+						<RowIconButton label="Move to Inbox" onClick={() => actions.modify(ids, Actions.moveToInbox, { message: "Conversation moved to Inbox." })}>
+							<Inbox className="size-4" />
+						</RowIconButton>
+					))}
+				{!inTrashOrSpam && (
+					<RowIconButton label="Delete" onClick={() => actions.modify(ids, Actions.trash, { message: "Conversation moved to Trash." })}>
+						<Trash2 className="size-4" />
+					</RowIconButton>
+				)}
+				{thread.unread ? (
+					<RowIconButton label="Mark as read" onClick={() => actions.modify(ids, Actions.markRead)}>
+						<MailOpen className="size-4" />
+					</RowIconButton>
+				) : (
+					<RowIconButton label="Mark as unread" onClick={() => actions.modify(ids, Actions.markUnread)}>
+						<Mail className="size-4" />
+					</RowIconButton>
+				)}
+			</div>
+		</div>
 	);
 }
 

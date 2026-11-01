@@ -1,4 +1,4 @@
-import { AlertOctagon, File, Inbox, type LucideIcon, Send, Star, Tag, Tags, Trash2 } from "lucide-react";
+import { AlertOctagon, File, Inbox, type LucideIcon, Mails, Send, Star, Tag, Tags, Trash2 } from "lucide-react";
 import type { Label } from "../../shared/api";
 
 /** Sidebar entries for system labels, in Gmail's order. The slug is the URL segment. */
@@ -17,11 +17,19 @@ export const SYSTEM_FOLDERS: readonly Folder[] = [
 	{ slug: "important", labelId: "IMPORTANT", name: "Important", icon: Tags, count: "none" },
 	{ slug: "sent", labelId: "SENT", name: "Sent", icon: Send, count: "none" },
 	{ slug: "drafts", labelId: "DRAFT", name: "Drafts", icon: File, count: "total" },
+	{ slug: "all", labelId: "ALL", name: "All Mail", icon: Mails, count: "none" },
 	{ slug: "spam", labelId: "SPAM", name: "Spam", icon: AlertOctagon, count: "unread" },
 	{ slug: "trash", labelId: "TRASH", name: "Trash", icon: Trash2, count: "none" },
 ];
 
 export const DEFAULT_FOLDER = "inbox";
+
+/** Gmail's label palette (background colours). */
+export const LABEL_COLORS = [
+	"#fb4c2f", "#ffad47", "#fad165", "#16a766", "#43d692", "#4a86e8",
+	"#a479e2", "#f691b3", "#2da2bb", "#b99aff", "#ff7537", "#8a1c0a",
+	"#7a2e0b", "#0b804b", "#285bac", "#41236d", "#83334c", "#666666",
+];
 export const UserLabelIcon = Tag;
 
 /**

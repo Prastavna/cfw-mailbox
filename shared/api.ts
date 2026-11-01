@@ -120,3 +120,47 @@ export interface ThreadDetail {
 
 /** Sent over /api/mailboxes/:id/events when something in the mailbox changes. */
 export type MailboxEvent = { type: "threads.changed"; threadIds: string[] };
+
+// ---- Actions ---------------------------------------------------------------
+
+/** Pseudo-label for "All Mail": every thread except Spam and Trash. */
+export const ALL_MAIL = "ALL";
+
+/** Labels the server manages itself; they can't be added or removed by hand. */
+export const MANAGED_LABELS = ["SENT", "DRAFT"] as const;
+
+export interface ModifyThreadsRequest {
+	threadIds: string[];
+	addLabelIds?: string[];
+	removeLabelIds?: string[];
+}
+
+/** The labels actually added to / removed from one message. Inverting these undoes an action exactly. */
+export interface MessageLabelChange {
+	messageId: string;
+	addLabelIds: string[];
+	removeLabelIds: string[];
+}
+
+export interface ModifyMessagesRequest {
+	changes: MessageLabelChange[];
+}
+
+export interface ModifyResult {
+	changes: MessageLabelChange[];
+	threadIds: string[];
+}
+
+export interface DeleteThreadsRequest {
+	threadIds: string[];
+}
+
+export interface LabelInput {
+	name: string;
+	color?: string | null;
+}
+
+/** Undo for a ModifyResult: the same changes, reversed. */
+export function invertChanges(changes: MessageLabelChange[]): MessageLabelChange[] {
+	return changes.map((c) => ({ messageId: c.messageId, addLabelIds: c.removeLabelIds, removeLabelIds: c.addLabelIds }));
+}

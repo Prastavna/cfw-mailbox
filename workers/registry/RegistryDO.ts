@@ -4,15 +4,8 @@ import { drizzle, type DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlit
 import type { Domain, Mailbox, MailboxAccess, MailboxRole, Member } from "../../shared/api";
 import { domainOf, normalizeAddress, normalizeDomain } from "../../shared/address";
 import { runMigrations } from "../lib/migrate";
+import { ok, type Result } from "../lib/result";
 import { domains, mailboxes, mailboxMembers, REGISTRY_MIGRATIONS } from "./schema";
-
-/**
- * Errors that cross the RPC boundary arrive as plain `Error`s, so expected
- * failures are returned as values instead of thrown.
- */
-export type Result<T> = { ok: true; value: T } | { ok: false; code: "conflict" | "not_found" | "invalid"; message: string };
-
-const ok = <T>(value: T): Result<T> => ({ ok: true, value });
 
 /**
  * The single, global directory: which domains this install serves, which
@@ -156,6 +149,8 @@ export class RegistryDO extends DurableObject<Env> {
 		return row?.role ?? null;
 	}
 }
+
+export type { Result };
 
 export function getRegistry(env: Env): DurableObjectStub<RegistryDO> {
 	const ns = env.REGISTRY as DurableObjectNamespace<RegistryDO>;
