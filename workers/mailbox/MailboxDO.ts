@@ -27,7 +27,9 @@ import { htmlToText, isReplySubject, makeSnippet, normalizeSubject } from "../em
 import { runMigrations } from "../lib/migrate";
 import { fail, ok, type Result } from "../lib/result";
 import { messageKeys, TEXT_LIMIT } from "./keys";
+import { parseSearch } from "../../shared/search";
 import { MAILBOX_MIGRATIONS, SystemLabel } from "./schema";
+import { compileSearch } from "./search";
 
 /** Everything needed to store one message. Blobs are already in R2. */
 export interface IngestInput {
@@ -448,6 +450,61 @@ export class MailboxDO extends DurableObject<Env> {
 			threads: page.map(toThreadSummary),
 			nextCursor: rows.length > opts.limit && last ? encodeCursor(last) : null,
 		};
+	}
+
+	/**
+	 * Threads with at least one message matching a Gmail-style query, newest
+	 * first. Trash and Spam are left out unless the query asks for them.
+	 */
+	async search(opts: { query: string; cursor?: string; limit: number; tzOffsetMinutes: number }): Promise<Result<ThreadPage>> {
+		const parsed = parseSearch(opts.query);
+		if (!parsed.length) return ok({ threads: [], nextCursor: null });
+		const labels = this.sql.exec<{ id: string; name: string }>("SELECT id, name FROM labels WHERE type = 'user'").toArray();
+		const compiled = compileSearch(parsed, { labels, now: Date.now(), tzOffsetMinutes: opts.tzOffsetMinutes });
+
+		// Search conditions use numbered parameters (?1, ?2, …); continue the numbering here.
+		const params: (string | number | null)[] = [...compiled.params];
+		const bind = (v: string | number | null) => {
+			params.push(v);
+			return `?${params.length}`;
+		};
+		const clauses: string[] = [];
+		if (compiled.scope === "ALL") {
+			clauses.push("NOT EXISTS (SELECT 1 FROM thread_labels x WHERE x.thread_id = t.id AND x.label_id IN ('TRASH', 'SPAM'))");
+		} else if (compiled.scope !== "ANYWHERE") {
+			clauses.push(`EXISTS (SELECT 1 FROM thread_labels x WHERE x.thread_id = t.id AND x.label_id = ${bind(compiled.scope)})`);
+			const hidden = hiddenLabelsFor(compiled.scope);
+			if (hidden.length) {
+				clauses.push(
+					`NOT EXISTS (SELECT 1 FROM thread_labels x WHERE x.thread_id = t.id AND x.label_id IN (SELECT value FROM json_each(${bind(JSON.stringify(hidden))})))`,
+				);
+			}
+		}
+		if (compiled.where) clauses.push(`t.id IN (SELECT m.thread_id FROM messages m WHERE ${compiled.where})`);
+		const cursor = decodeCursor(opts.cursor);
+		if (cursor) {
+			const at = bind(cursor.at);
+			clauses.push(`(t.last_message_at < ${at} OR (t.last_message_at = ${at} AND t.id < ${bind(cursor.id)}))`);
+		}
+
+		let rows: ThreadRow[];
+		try {
+			rows = this.sql
+				.exec<ThreadRow>(
+					`SELECT ${THREAD_COLUMNS} FROM threads t
+					 ${clauses.length ? `WHERE ${clauses.join(" AND ")}` : ""}
+					 ORDER BY t.last_message_at DESC, t.id DESC
+					 LIMIT ${bind(opts.limit + 1)}`,
+					...params,
+				)
+				.toArray();
+		} catch (err) {
+			console.warn("Search failed", { query: opts.query, err: String(err) });
+			return fail("invalid", "Couldn't understand that search");
+		}
+		const page = rows.slice(0, opts.limit);
+		const last = page.at(-1);
+		return ok({ threads: page.map(toThreadSummary), nextCursor: rows.length > opts.limit && last ? encodeCursor(last) : null });
 	}
 
 	async getThread(threadId: string): Promise<ThreadDetail | null> {

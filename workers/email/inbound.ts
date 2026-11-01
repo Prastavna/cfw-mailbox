@@ -3,7 +3,7 @@ import { INLINE_HTML_LIMIT, messageKeys, TEXT_LIMIT } from "../mailbox/keys";
 import { getMailbox, type IngestInput } from "../mailbox/MailboxDO";
 import { SystemLabel } from "../mailbox/schema";
 import { getRegistry } from "../registry/RegistryDO";
-import { parseMessage, type ParsedMessage } from "./parse";
+import { htmlToText, parseMessage, type ParsedMessage } from "./parse";
 
 export { INLINE_HTML_LIMIT, messageKeys };
 
@@ -70,7 +70,8 @@ export async function handleInbound(message: InboundMessage, env: Env): Promise<
 			subject: parsed.subject,
 			sentAt: parsed.sentAt !== null && parsed.sentAt <= receivedAt + MAX_CLOCK_SKEW_MS ? parsed.sentAt : receivedAt,
 			receivedAt,
-			text: parsed.text ? parsed.text.slice(0, TEXT_LIMIT) : null,
+			// HTML-only mail gets a derived text version, for search and the plain-text fallback.
+			text: (parsed.text ?? (parsed.html ? htmlToText(parsed.html) : null))?.slice(0, TEXT_LIMIT) || null,
 			html: htmlInR2 ? null : parsed.html,
 			htmlKey: htmlInR2 ? keys.html : null,
 			rawKey: keys.raw,

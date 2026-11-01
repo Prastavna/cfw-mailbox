@@ -29,6 +29,8 @@ interface ThreadListProps {
 	labels: Label[] | undefined;
 	actions: MailActions;
 	composer: Composer;
+	/** Show search results for this query instead of the label's threads. */
+	query?: string;
 }
 
 const ROW_HEIGHT = 40;
@@ -36,8 +38,9 @@ const ROW_HEIGHT_MOBILE = 76;
 
 type SelectPreset = "all" | "none" | "read" | "unread" | "starred" | "unstarred";
 
-export function ThreadList({ mailboxId, mailboxAddress, folderSegment, labelId, folderName, labels, actions, composer }: ThreadListProps) {
-	const query = useThreads(mailboxId, labelId);
+export function ThreadList({ mailboxId, mailboxAddress, folderSegment, labelId, folderName, labels, actions, composer, query: search }: ThreadListProps) {
+	const query = useThreads(mailboxId, labelId, search);
+	const hrefSuffix = search !== undefined ? `?q=${encodeURIComponent(search)}` : "";
 	const queryClient = useQueryClient();
 
 	// A conversation that is only a draft opens in a compose window, like Gmail.
@@ -170,7 +173,11 @@ export function ThreadList({ mailboxId, mailboxAddress, folderSegment, labelId, 
 				<p className="p-8 text-center text-sm text-destructive">Couldn't load conversations: {query.error.message}</p>
 			) : threads.length === 0 ? (
 				<p className="text-muted-foreground p-10 text-center text-sm">
-					{labelId === "INBOX" ? "Your inbox is empty." : `No conversations in ${folderName}.`}
+					{search !== undefined
+						? "No messages matched your search."
+						: labelId === "INBOX"
+							? "Your inbox is empty."
+							: `No conversations in ${folderName}.`}
 				</p>
 			) : (
 				<div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto" role="list" aria-label={`${folderName} conversations`}>
@@ -185,7 +192,7 @@ export function ThreadList({ mailboxId, mailboxAddress, folderSegment, labelId, 
 								>
 									<ThreadRow
 										thread={thread}
-										href={`/mail/${mailboxId}/${folderSegment}/${thread.id}`}
+										href={`/mail/${mailboxId}/${folderSegment}/${thread.id}${hrefSuffix}`}
 										me={mailboxAddress}
 										chips={visibleLabelChips(thread.labelIds, labels, labelId)}
 										selected={selected.has(thread.id)}

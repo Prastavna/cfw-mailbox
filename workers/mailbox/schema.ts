@@ -1,4 +1,6 @@
+import { htmlToText } from "../email/parse";
 import type { Migration } from "../lib/migrate";
+import { TEXT_LIMIT } from "./keys";
 
 /**
  * MailboxDO queries its SQLite database directly (see MailboxDO.ts); this file
@@ -28,6 +30,20 @@ export type SystemLabelId = (typeof SystemLabel)[keyof typeof SystemLabel];
 const systemLabelRows = ["INBOX", "SENT", "DRAFT", "SPAM", "TRASH", "STARRED", "IMPORTANT", "UNREAD"]
 	.map((id) => `('${id}', '${id}', 'system', NULL, 0)`)
 	.join(",\n\t\t\t\t");
+
+/** "name address name address …" from a JSON array of EmailAddress, for the search index. */
+const addressText = (column: string) =>
+	`(SELECT coalesce(group_concat(coalesce(json_extract(value, '$.name'), '') || ' ' || json_extract(value, '$.address'), ' '), '')
+	  FROM json_each(${column}))`;
+
+const ftsRow = (m: string) => `${m}.subject,
+	coalesce(${m}.from_name, '') || ' ' || ${m}.from_address,
+	${addressText(`${m}."to"`)} || ' ' || ${addressText(`${m}.cc`)} || ' ' || ${addressText(`${m}.bcc`)},
+	coalesce(${m}.text_body, '')`;
+
+const ftsFilenames = (messageId: string) =>
+	`UPDATE messages_fts SET filenames = (SELECT coalesce(group_concat(filename, ' '), '') FROM attachments WHERE message_id = ${messageId})
+	 WHERE rowid = (SELECT rowid FROM messages WHERE id = ${messageId});`;
 
 export const MAILBOX_MIGRATIONS: readonly Migration[] = [
 	{
@@ -134,5 +150,52 @@ export const MAILBOX_MIGRATIONS: readonly Migration[] = [
 			CREATE INDEX idx_messages_send_at ON messages(send_at) WHERE send_at IS NOT NULL;
 			CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 		`,
+	},
+	{
+		version: 4,
+		name: "search",
+		/*
+		 * Full-text index over every message, keyed by the messages table's rowid
+		 * and kept in step by triggers. It stores its own copy of the text so
+		 * snippets and ranking don't need joins.
+		 */
+		sql: `
+			CREATE VIRTUAL TABLE messages_fts USING fts5(
+				subject, sender, recipients, body, filenames,
+				tokenize = 'unicode61 remove_diacritics 2'
+			);
+
+			CREATE TRIGGER messages_fts_insert AFTER INSERT ON messages BEGIN
+				INSERT INTO messages_fts (rowid, subject, sender, recipients, body, filenames)
+				VALUES (new.rowid, ${ftsRow("new")}, '');
+			END;
+			CREATE TRIGGER messages_fts_update AFTER UPDATE OF subject, from_name, from_address, "to", cc, bcc, text_body ON messages BEGIN
+				DELETE FROM messages_fts WHERE rowid = old.rowid;
+				INSERT INTO messages_fts (rowid, subject, sender, recipients, body, filenames)
+				VALUES (new.rowid, ${ftsRow("new")},
+					(SELECT coalesce(group_concat(filename, ' '), '') FROM attachments WHERE message_id = new.id));
+			END;
+			CREATE TRIGGER messages_fts_delete AFTER DELETE ON messages BEGIN
+				DELETE FROM messages_fts WHERE rowid = old.rowid;
+			END;
+			CREATE TRIGGER attachments_fts_insert AFTER INSERT ON attachments BEGIN
+				${ftsFilenames("new.message_id")}
+			END;
+			CREATE TRIGGER attachments_fts_delete AFTER DELETE ON attachments BEGIN
+				${ftsFilenames("old.message_id")}
+			END;
+
+			INSERT INTO messages_fts (rowid, subject, sender, recipients, body, filenames)
+			SELECT m.rowid, ${ftsRow("m")},
+				(SELECT coalesce(group_concat(filename, ' '), '') FROM attachments WHERE message_id = m.id)
+			FROM messages m;
+		`,
+		// HTML-only mail had no plain text; derive it so its body is searchable (the update trigger reindexes it).
+		run: (sql) => {
+			const rows = sql
+				.exec<{ id: string; html_body: string }>("SELECT id, html_body FROM messages WHERE text_body IS NULL AND html_body IS NOT NULL")
+				.toArray();
+			for (const r of rows) sql.exec("UPDATE messages SET text_body = ? WHERE id = ?", htmlToText(r.html_body).slice(0, TEXT_LIMIT), r.id);
+		},
 	},
 ];

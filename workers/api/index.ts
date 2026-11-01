@@ -16,6 +16,7 @@ import {
 import { domainOf, isValidAddress, isValidDomain } from "../../shared/address";
 import { authenticate, type Identity } from "../auth/access";
 import { HttpError } from "../lib/http";
+import { MAX_QUERY_LENGTH } from "../../shared/search";
 import { messageKeys } from "../mailbox/keys";
 import { getMailbox } from "../mailbox/MailboxDO";
 import { getRegistry, type Result } from "../registry/RegistryDO";
@@ -36,9 +37,13 @@ const CreateMailboxBody = z.object({
 const SetMemberBody = z.object({ email: addressSchema, role: z.enum(["owner", "member"]) });
 const ListThreadsQuery = z.object({
 	label: z.string().min(1).max(100).default("INBOX"),
+	/** A Gmail-style search; when present, `label` is ignored. */
+	q: z.string().max(MAX_QUERY_LENGTH).optional(),
+	/** The browser's Date#getTimezoneOffset(), for date operators. */
+	tz: z.coerce.number().int().min(-1000).max(1000).default(0),
 	cursor: z.string().max(200).optional(),
 	limit: z.coerce.number().int().min(1).max(100).default(50),
-}).transform(({ label, ...rest }) => ({ labelId: label, ...rest }));
+});
 
 const Id = z.string().min(1).max(100);
 const LabelIds = z.array(Id).max(20).default([]);
@@ -256,7 +261,11 @@ mailbox.post("/threads/delete", async (c) => {
 mailbox.get("/threads", async (c) => {
 	const q = ListThreadsQuery.safeParse(c.req.query());
 	if (!q.success) throw new HttpError(400, q.error.issues.map((i) => i.message).join("; "));
-	return c.json<ThreadPage>(await mailboxStub(c).listThreads(q.data));
+	const { label, q: query, tz, cursor, limit } = q.data;
+	if (query !== undefined) {
+		return c.json<ThreadPage>(unwrap(await mailboxStub(c).search({ query, cursor, limit, tzOffsetMinutes: tz })));
+	}
+	return c.json<ThreadPage>(await mailboxStub(c).listThreads({ labelId: label, cursor, limit }));
 });
 
 mailbox.get("/threads/:threadId", async (c) => {

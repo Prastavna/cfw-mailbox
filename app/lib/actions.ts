@@ -11,6 +11,7 @@ import {
 	type ThreadDetail,
 	type ThreadPage,
 } from "../../shared/api";
+import { parseSearch, searchesHiddenFolders } from "../../shared/search";
 import { apiFetch, queryKeys } from "./api";
 
 /**
@@ -43,6 +44,10 @@ const hiddenIn = (labelId: string) => HIDDEN[labelId] ?? ["TRASH", "SPAM"];
 
 /** Whether a thread with these labels appears in the given list. Mirrors MailboxDO.listThreads. */
 export function belongsTo(listLabelId: string, labelIds: string[]): boolean {
+	// Search results keep a thread after an action (the next refetch decides), unless it leaves for Trash/Spam.
+	if (listLabelId.startsWith("search:")) {
+		return searchesHiddenFolders(parseSearch(listLabelId.slice(7))) || belongsTo(ALL_MAIL, labelIds);
+	}
 	if (listLabelId === ALL_MAIL) return !labelIds.includes("TRASH") && !labelIds.includes("SPAM");
 	return labelIds.includes(listLabelId) && !hiddenIn(listLabelId).some((l) => labelIds.includes(l));
 }

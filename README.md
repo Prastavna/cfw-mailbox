@@ -7,7 +7,7 @@ Self-hosted, Gmail-style webmail that runs entirely on your own Cloudflare accou
 - **Many users, many domains.** Admins add domains and mailboxes and grant people access. Each user switches between the mailboxes they're allowed to open.
 - **Sign-in** uses [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/). The Worker verifies every request's Access token itself and enforces per-mailbox permissions.
 
-> Status: **Phase 4 (writing mail)**. Mail is received, threaded and readable; you can archive, delete, report spam, mark read or unread, star and label it, with undo. You can write new messages, reply, reply all and forward in Gmail-style compose windows, with rich text, attachments, auto-saved drafts, a signature and undo send. Admins manage domains, mailboxes and members at `/admin`. Next: search (Phase 5).
+> Status: **Phase 5 (search)**. Mail is received, threaded and readable; you can archive, delete, report spam, mark read or unread, star and label it, with undo. You can write new messages, reply, reply all and forward in Gmail-style compose windows, with rich text, attachments, auto-saved drafts, a signature and undo send. Search covers every message with Gmail's operators. Admins manage domains, mailboxes and members at `/admin`. Next: shortcuts, snooze, contacts, filters and vacation replies (Phase 6).
 
 ## Stack
 
@@ -28,7 +28,7 @@ workers/
   api/               HTTP API
   auth/access.ts     Cloudflare Access JWT verification (+ local dev mode)
   registry/          RegistryDO: domains, mailboxes, members (one global instance)
-  mailbox/           MailboxDO: one per mailbox; threads, messages, labels, drafts, outbox
+  mailbox/           MailboxDO: one per mailbox; threads, messages, labels, drafts, outbox, search
   email/inbound.ts   Email Routing handler
   email/outbound.ts  Builds Email Service payloads; explains send errors
 test/                Vitest tests that run in workerd
@@ -73,6 +73,7 @@ Checks: `pnpm test`, `pnpm run typecheck`, `pnpm run build`.
 | GET/PUT/DELETE | `/api/admin/mailboxes/:id/members[/:email]` | admin |
 | GET | `/api/mailboxes/:id/labels` | mailbox member (with total/unread counts) |
 | GET | `/api/mailboxes/:id/threads?label=INBOX&cursor=&limit=` | mailbox member |
+| GET | `/api/mailboxes/:id/threads?q=from:alice budget&tz=-60` | mailbox member (search; `tz` is the browser's timezone offset) |
 | GET | `/api/mailboxes/:id/threads/:threadId` | mailbox member |
 | GET | `/api/mailboxes/:id/messages/:messageId/attachments/:attachmentId[?inline=1]` | mailbox member |
 | GET | `/api/mailboxes/:id/messages/:messageId/raw` | mailbox member ("Show original") |
@@ -102,6 +103,24 @@ Every action is a label change, as in Gmail. Archive removes `INBOX`; Delete add
 4. If Email Service refuses the message (unverified sender, suppressed recipient, too large…), it goes back to Drafts with the reason, and open tabs show it. Temporary failures (rate limits, delivery errors) are retried after 1, 5 and 15 minutes.
 
 Limits follow Email Service: 50 recipients, 32 attachments and 25 MB per message.
+
+## Search
+
+Each mailbox keeps an SQLite FTS5 index (subject, sender, recipients, body text, attachment names) that triggers keep in step with every insert, edit and delete. Words match as prefixes, ignoring case and accents; `"quoted text"` matches an exact phrase. Results are conversations with at least one matching message, newest first. Spam and Trash are left out unless you ask for them.
+
+| Operator | Example |
+|---|---|
+| words, `"phrase"`, `-word`, `OR` | `budget "launch plan" -draft`, `invoice OR receipt` |
+| `from:` `to:` `cc:` `bcc:` `subject:` `filename:` | `from:alice@acme.com`, `subject:"Q4 plan"`, `filename:pdf` |
+| `in:` | `inbox` `sent` `drafts` `starred` `important` `spam` `trash` `anywhere`, or a label name |
+| `label:` | `label:receipts`, `label:"travel plans"` (or `travel-plans`) |
+| `is:` | `unread` `read` `starred` `important` |
+| `has:` | `attachment`, `userlabels`, `nouserlabels` |
+| `after:` `before:` | `after:2026/10/01 before:2026-11-01` (your local dates) |
+| `newer_than:` `older_than:` | `newer_than:7d`, `older_than:1y` (`d` `w` `m` `y`) |
+| `larger:` `smaller:` | `larger:5M`, `smaller:100K` |
+
+The search box has an options panel that builds these for you.
 
 ## How receiving works
 

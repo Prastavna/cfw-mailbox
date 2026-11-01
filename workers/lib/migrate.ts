@@ -1,7 +1,8 @@
 /**
  * Minimal forward-only schema migrations for SQLite-backed Durable Objects.
  *
- * Each migration is plain SQL, applied once, in order, inside a transaction.
+ * Each migration is SQL (plus an optional data step in code), applied once,
+ * in order, inside a transaction.
  * Never edit or reorder a migration that has shipped: append a new one.
  */
 
@@ -10,6 +11,8 @@ export interface Migration {
 	version: number;
 	name: string;
 	sql: string;
+	/** Runs after `sql`, in the same transaction, for data changes SQL can't express. */
+	run?: (sql: SqlStorage) => void;
 }
 
 export function runMigrations(storage: DurableObjectStorage, migrations: readonly Migration[]): void {
@@ -27,6 +30,7 @@ export function runMigrations(storage: DurableObjectStorage, migrations: readonl
 		if (m.version <= current) continue;
 		storage.transactionSync(() => {
 			sql.exec(m.sql);
+			m.run?.(sql);
 			sql.exec("INSERT INTO _migrations (version, name, applied_at) VALUES (?, ?, ?)", m.version, m.name, Date.now());
 		});
 	}

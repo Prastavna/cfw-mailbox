@@ -24,6 +24,9 @@ export const SYSTEM_FOLDERS: readonly Folder[] = [
 
 export const DEFAULT_FOLDER = "inbox";
 
+/** URL segment for search results: /mail/:mailboxId/search?q=… */
+export const SEARCH_SEGMENT = "search";
+
 /** Gmail's label palette (background colours). */
 export const LABEL_COLORS = [
 	"#fb4c2f", "#ffad47", "#fad165", "#16a766", "#43d692", "#4a86e8",

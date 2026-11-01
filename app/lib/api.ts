@@ -42,13 +42,20 @@ export function useLabels(mailboxId: string) {
 	return useQuery({ queryKey: queryKeys.labels(mailboxId), queryFn: () => apiFetch<Label[]>(`/mailboxes/${mailboxId}/labels`) });
 }
 
-export function useThreads(mailboxId: string, labelId: string | null) {
+/** Cache key segment for a search's results, alongside label IDs. */
+export const searchListKey = (query: string) => `search:${query}`;
+
+export function useThreads(mailboxId: string, labelId: string | null, query?: string) {
 	return useInfiniteQuery({
-		queryKey: queryKeys.threads(mailboxId, labelId ?? ""),
-		enabled: !!labelId,
+		queryKey: queryKeys.threads(mailboxId, query !== undefined ? searchListKey(query) : (labelId ?? "")),
+		enabled: !!labelId || query !== undefined,
 		initialPageParam: null as string | null,
 		queryFn: ({ pageParam }) => {
-			const params = new URLSearchParams({ label: labelId!, limit: String(PAGE_SIZE) });
+			const params = new URLSearchParams(
+				query !== undefined
+					? { q: query, tz: String(new Date().getTimezoneOffset()), limit: String(PAGE_SIZE) }
+					: { label: labelId!, limit: String(PAGE_SIZE) },
+			);
 			if (pageParam) params.set("cursor", pageParam);
 			return apiFetch<ThreadPage>(`/mailboxes/${mailboxId}/threads?${params}`);
 		},

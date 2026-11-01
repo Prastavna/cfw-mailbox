@@ -1,22 +1,24 @@
-import { Mail, Menu, Search, Settings } from "lucide-react";
+import { Mail, Menu, Settings } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router";
-import type { MailboxAccess, Me } from "../../../shared/api";
+import type { Label, MailboxAccess, Me } from "../../../shared/api";
 import { Button } from "~/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "~/components/ui/tooltip";
 import type { LiveStatus } from "~/lib/api";
 import { cn } from "~/lib/utils";
 import { AccountSwitcher } from "./AccountSwitcher";
+import { SearchBar } from "./SearchBar";
 import { SettingsDialog } from "./SettingsDialog";
 
 interface HeaderProps {
 	me: Me;
 	mailbox: MailboxAccess;
 	live: LiveStatus;
+	labels: Label[] | undefined;
 	onToggleSidebar: () => void;
 }
 
-export function Header({ me, mailbox, live, onToggleSidebar }: HeaderProps) {
+export function Header({ me, mailbox, live, labels, onToggleSidebar }: HeaderProps) {
 	const [settingsOpen, setSettingsOpen] = useState(false);
 	return (
 		<header className="flex h-16 shrink-0 items-center gap-2 px-2 sm:px-4">
@@ -28,19 +30,8 @@ export function Header({ me, mailbox, live, onToggleSidebar }: HeaderProps) {
 				<span className="hidden sm:inline">Mail</span>
 			</Link>
 
-			<div className="flex flex-1 justify-center lg:justify-start">
-				<Tooltip>
-					<TooltipTrigger asChild>
-						<div
-							className="flex h-12 w-full max-w-[720px] items-center gap-3 rounded-full bg-mail-hover/70 px-4 text-muted-foreground dark:bg-mail-surface"
-							aria-disabled
-						>
-							<Search className="size-5" aria-hidden />
-							<span className="text-base">Search mail</span>
-						</div>
-					</TooltipTrigger>
-					<TooltipContent>Search arrives in a later update</TooltipContent>
-				</Tooltip>
+			<div className="flex min-w-0 flex-1 justify-center lg:justify-start">
+				<SearchBar mailboxId={mailbox.id} labels={labels} />
 			</div>
 
 			<Tooltip>

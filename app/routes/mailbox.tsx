@@ -71,7 +71,7 @@ function MailboxFrame({ me, mailbox }: { me: Me; mailbox: MailboxAccess }) {
 	return (
 		<TooltipProvider delayDuration={400}>
 			<div className="flex h-svh flex-col bg-mail-canvas text-foreground">
-				<Header me={me} mailbox={mailbox} live={live} onToggleSidebar={toggleSidebar} />
+				<Header me={me} mailbox={mailbox} live={live} labels={labels} onToggleSidebar={toggleSidebar} />
 				<div className="flex min-h-0 flex-1">
 					<aside className={cn("hidden shrink-0 overflow-y-auto md:block", collapsed ? "w-[72px]" : "w-64")}>
 						<Sidebar mailboxId={mailbox.id} labels={labels} collapsed={collapsed} actions={actions} onCompose={() => composer.compose()} />
