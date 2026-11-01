@@ -3,7 +3,11 @@ import {
 	ALL_MAIL,
 	MANAGED_LABELS,
 	SEND_LIMITS,
+	type Contact,
 	type CreateDraftRequest,
+	DEFAULT_VACATION,
+	type FilterActions,
+	type MailFilter,
 	type DraftDetail,
 	type DraftFields,
 	type MailboxSettings,
@@ -22,7 +26,7 @@ import type {
 	ThreadPage,
 	ThreadSummary,
 } from "../../shared/api";
-import { buildEmail, describeSendError, normalizeMessageId, type OutgoingMessage, transport } from "../email/outbound";
+import { buildEmail, describeSendError, normalizeMessageId, type OutgoingMessage, referencesHeader, transport } from "../email/outbound";
 import { htmlToText, isReplySubject, makeSnippet, normalizeSubject } from "../email/parse";
 import { runMigrations } from "../lib/migrate";
 import { fail, ok, type Result } from "../lib/result";
@@ -79,6 +83,7 @@ type ThreadRow = {
 	has_attachments: number;
 	last_message_at: number;
 	label_ids: string | null;
+	snoozed_until: number | null;
 };
 
 type MessageRow = {
@@ -114,7 +119,8 @@ type AttachmentRow = {
 };
 
 const THREAD_COLUMNS = `t.id, t.subject, t.snippet, t.participants, t.message_count, t.has_attachments, t.last_message_at,
-	(SELECT group_concat(label_id) FROM thread_labels WHERE thread_id = t.id) AS label_ids`;
+	(SELECT group_concat(label_id) FROM thread_labels WHERE thread_id = t.id) AS label_ids,
+	(SELECT until FROM snoozes WHERE thread_id = t.id) AS snoozed_until`;
 
 function toThreadSummary(row: ThreadRow): ThreadSummary {
 	const labelIds = row.label_ids ? row.label_ids.split(",").sort() : [];
@@ -128,6 +134,7 @@ function toThreadSummary(row: ThreadRow): ThreadSummary {
 		lastMessageAt: row.last_message_at,
 		labelIds,
 		unread: labelIds.includes(SystemLabel.UNREAD),
+		snoozedUntil: row.snoozed_until,
 	};
 }
 
@@ -160,7 +167,14 @@ const RESERVED_LABEL_NAMES = new Set(["inbox", "sent", "draft", "drafts", "spam"
 
 const MAX_BATCH = 500;
 
-const DEFAULT_SETTINGS: MailboxSettings = { signature: "", undoSendSeconds: 5 };
+const DEFAULT_SETTINGS: MailboxSettings = { signature: "", undoSendSeconds: 5, vacation: DEFAULT_VACATION };
+/** Trash and Spam are emptied of messages that have been there this long. */
+export const RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+/** A sender gets at most one vacation reply in this period, like Gmail. */
+const VACATION_INTERVAL_MS = 4 * 24 * 60 * 60 * 1000;
+/** Most messages deleted per alarm run when emptying Trash/Spam; the alarm re-arms for the rest. */
+const PURGE_BATCH = 500;
+const MAX_FILTERS = 200;
 /** While a message is being handed to Email Service it is leased for this long; a crash mid-send retries after it. */
 const SEND_LEASE_MS = 10 * 60 * 1000;
 /** Delays before retrying a send that failed for a temporary reason. */
@@ -191,6 +205,22 @@ type DraftRow = {
 const DRAFT_COLUMNS = `m.id, m.thread_id, m.from_address, m.from_name, m."to", m.cc, m.bcc, m.subject, m.html_body, m.text_body,
 	m.in_reply_to, m."references", m.send_at, m.send_error, m.send_attempts, m.received_at,
 	(SELECT group_concat(label_id) FROM message_labels WHERE message_id = m.id) AS label_ids`;
+
+/** The label changes a filter makes. */
+function filterDelta(a: FilterActions): { add: string[]; remove: string[] } {
+	const add: string[] = [];
+	const remove: string[] = [];
+	if (a.archive) remove.push(SystemLabel.INBOX);
+	if (a.markRead) remove.push(SystemLabel.UNREAD);
+	if (a.star) add.push(SystemLabel.STARRED);
+	if (a.important) add.push(SystemLabel.IMPORTANT);
+	if (a.labelId) add.push(a.labelId);
+	if (a.trash) {
+		add.push(SystemLabel.TRASH);
+		if (!remove.includes(SystemLabel.INBOX)) remove.push(SystemLabel.INBOX);
+	}
+	return { add, remove };
+}
 
 /** Header-safe subject: no line breaks, within Email Service's limit. */
 function cleanSubject(subject: string): string {
@@ -229,11 +259,21 @@ export class MailboxDO extends DurableObject<Env> {
 
 			const threadId = this.findThread(input) ?? this.createThread(input);
 			this.insertMessage(threadId, input);
+			// New mail in a snoozed conversation brings it back, like Gmail.
+			this.cancelSnoozes([threadId]);
+			if (input.labelIds.includes(SystemLabel.INBOX)) {
+				this.applyFilters(input.id);
+				this.recordContacts([input.from], "received", input.receivedAt);
+			}
 			this.recomputeThread(threadId);
 			return { status: "stored", threadId };
 		});
 
-		if (result.status === "stored") this.broadcast({ type: "threads.changed", threadIds: [result.threadId] });
+		if (result.status === "stored") {
+			this.broadcast({ type: "threads.changed", threadIds: [result.threadId] });
+			// A filter may have sent it to Trash, which starts the 30-day clock.
+			await this.scheduleAlarm();
+		}
 		return result;
 	}
 
@@ -318,8 +358,9 @@ export class MailboxDO extends DurableObject<Env> {
 		);
 		for (const labelId of input.labelIds) {
 			this.sql.exec(
-				"INSERT OR IGNORE INTO message_labels (message_id, label_id) SELECT ?, id FROM labels WHERE id = ?",
+				"INSERT OR IGNORE INTO message_labels (message_id, label_id, added_at) SELECT ?, id, ? FROM labels WHERE id = ?",
 				input.id,
+				input.receivedAt,
 				labelId,
 			);
 		}
@@ -353,6 +394,7 @@ export class MailboxDO extends DurableObject<Env> {
 			.toArray();
 		const latest = messages.at(-1);
 		if (!latest) {
+			this.sql.exec("DELETE FROM snoozes WHERE thread_id = ?", threadId);
 			this.sql.exec("DELETE FROM thread_labels WHERE thread_id = ?", threadId);
 			this.sql.exec("DELETE FROM threads WHERE id = ?", threadId);
 			return;
@@ -611,7 +653,15 @@ export class MailboxDO extends DurableObject<Env> {
 			addLabelIds: addLabelIds.filter((l) => !LATEST_MESSAGE_ONLY.has(l) || latest.get(r.thread_id) === r.id),
 			removeLabelIds,
 		}));
-		return ok(this.applyChanges(entries));
+		const result = this.applyChanges(entries);
+		// Moving a snoozed conversation to the inbox, Trash or Spam ends the snooze. This isn't part of
+		// the undoable change: undo then leaves the conversation archived rather than half-snoozed.
+		if (addLabelIds.some((l) => l === SystemLabel.INBOX || l === SystemLabel.TRASH || l === SystemLabel.SPAM)) {
+			const cancelled = this.ctx.storage.transactionSync(() => this.cancelSnoozes(threadIds));
+			if (cancelled.length) this.broadcast({ type: "threads.changed", threadIds: cancelled });
+		}
+		await this.scheduleAlarm();
+		return ok(result);
 	}
 
 	/** Adds/removes labels on individual messages; also used to undo an earlier change exactly. */
@@ -619,7 +669,9 @@ export class MailboxDO extends DurableObject<Env> {
 		const invalid = this.checkLabelIds(changes.flatMap((c) => [...c.addLabelIds, ...c.removeLabelIds]));
 		if (invalid) return invalid;
 		if (changes.length > MAX_BATCH * 20) return fail("invalid", "Too many changes at once");
-		return ok(this.applyChanges(changes));
+		const result = this.applyChanges(changes);
+		await this.scheduleAlarm();
+		return ok(result);
 	}
 
 	private checkLabelIds(ids: string[]): Result<never> | null {
@@ -635,6 +687,7 @@ export class MailboxDO extends DurableObject<Env> {
 
 	/** Applies label changes in one transaction and reports only what actually changed. */
 	private applyChanges(entries: MessageLabelChange[]): ModifyResult {
+		const now = Date.now();
 		const result = this.ctx.storage.transactionSync(() => {
 			const applied: MessageLabelChange[] = [];
 			const threadIds = new Set<string>();
@@ -645,8 +698,12 @@ export class MailboxDO extends DurableObject<Env> {
 				if (!threadId) continue;
 				const added = e.addLabelIds.filter(
 					(l) =>
-						this.sql.exec("INSERT OR IGNORE INTO message_labels (message_id, label_id) VALUES (?, ?)", e.messageId, l)
-							.rowsWritten > 0,
+						this.sql.exec(
+							"INSERT OR IGNORE INTO message_labels (message_id, label_id, added_at) VALUES (?, ?, ?)",
+							e.messageId,
+							l,
+							now,
+						).rowsWritten > 0,
 				);
 				const removed = e.removeLabelIds.filter(
 					(l) =>
@@ -700,6 +757,7 @@ export class MailboxDO extends DurableObject<Env> {
 			this.sql.exec(`DELETE FROM message_labels WHERE message_id IN (${inThreads})`, json);
 			this.sql.exec("DELETE FROM messages WHERE thread_id IN (SELECT value FROM json_each(?))", json);
 			this.sql.exec("DELETE FROM thread_labels WHERE thread_id IN (SELECT value FROM json_each(?))", json);
+			this.sql.exec("DELETE FROM snoozes WHERE thread_id IN (SELECT value FROM json_each(?))", json);
 			this.sql.exec("DELETE FROM threads WHERE id IN (SELECT value FROM json_each(?))", json);
 			return { ids, keys };
 		});
@@ -765,11 +823,13 @@ export class MailboxDO extends DurableObject<Env> {
 
 	async getSettings(): Promise<MailboxSettings> {
 		const rows = this.sql.exec<{ key: string; value: string }>("SELECT key, value FROM settings").toArray();
-		const stored = Object.fromEntries(rows.map((r) => [r.key, JSON.parse(r.value)]));
-		return { ...DEFAULT_SETTINGS, ...stored } as MailboxSettings;
+		const stored = Object.fromEntries(rows.map((r) => [r.key, JSON.parse(r.value)])) as Partial<MailboxSettings>;
+		return { ...DEFAULT_SETTINGS, ...stored, vacation: { ...DEFAULT_VACATION, ...stored.vacation } };
 	}
 
 	async updateSettings(patch: Partial<MailboxSettings>): Promise<MailboxSettings> {
+		// Changing the vacation responder starts it afresh: everyone may get one reply again.
+		if (patch.vacation) this.sql.exec("DELETE FROM vacation_replies");
 		for (const [key, value] of Object.entries(patch)) {
 			if (value === undefined || !(key in DEFAULT_SETTINGS)) continue;
 			this.sql.exec("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", key, JSON.stringify(value));
@@ -1059,10 +1119,10 @@ export class MailboxDO extends DurableObject<Env> {
 
 		if (undoSendSeconds === 0) {
 			const result = await this.deliver(id);
-			await this.scheduleOutbox();
+			await this.scheduleAlarm();
 			return result;
 		}
-		await this.scheduleOutbox();
+		await this.scheduleAlarm();
 		return ok({ status: "queued", draftId: id, threadId: row.thread_id, sendAt });
 	}
 
@@ -1080,13 +1140,19 @@ export class MailboxDO extends DurableObject<Env> {
 			this.sql.exec("UPDATE messages SET send_at = NULL, send_error = NULL WHERE id = ?", id);
 			this.refreshThreadLabels(row.thread_id);
 		});
-		await this.scheduleOutbox();
+		await this.scheduleAlarm();
 		this.broadcast({ type: "threads.changed", threadIds: [row.thread_id] });
 		return ok(this.readDraft(id)!);
 	}
 
-	/** Delivers whatever in the Outbox is due, then re-arms for the next one. */
+	/**
+	 * One alarm serves everything time-based: sending after the undo window,
+	 * waking snoozed conversations, and emptying old Trash/Spam. Each run does
+	 * what's due and re-arms for the earliest next thing.
+	 */
 	async alarm(): Promise<void> {
+		this.wakeSnoozes();
+		await this.purgeExpired();
 		const due = this.sql
 			.exec<{ id: string }>(
 				`SELECT m.id FROM messages m JOIN message_labels ml ON ml.message_id = m.id AND ml.label_id = 'OUTBOX'
@@ -1096,18 +1162,26 @@ export class MailboxDO extends DurableObject<Env> {
 			)
 			.toArray();
 		for (const { id } of due) await this.deliver(id);
-		await this.scheduleOutbox();
+		await this.scheduleAlarm();
 	}
 
-	private async scheduleOutbox(): Promise<void> {
-		const next = this.sql
-			.exec<{ at: number | null }>(
-				`SELECT MIN(m.send_at) AS at FROM messages m
-				 JOIN message_labels ml ON ml.message_id = m.id AND ml.label_id = 'OUTBOX'`,
+	private async scheduleAlarm(): Promise<void> {
+		const { send, snooze, purge } = this.sql
+			.exec<{ send: number | null; snooze: number | null; purge: number | null }>(
+				`SELECT
+					(SELECT MIN(m.send_at) FROM messages m JOIN message_labels ml ON ml.message_id = m.id AND ml.label_id = 'OUTBOX') AS send,
+					(SELECT MIN(until) FROM snoozes) AS snooze,
+					(SELECT MIN(coalesce(added_at, 0)) FROM message_labels WHERE label_id IN ('TRASH', 'SPAM')) AS purge`,
 			)
-			.one().at;
-		if (next === null) await this.ctx.storage.deleteAlarm();
-		else await this.ctx.storage.setAlarm(Math.max(next, Date.now()));
+			.one();
+		const times = [send, snooze, purge === null ? null : purge + RETENTION_MS].filter((t): t is number => t !== null);
+		if (!times.length) {
+			await this.ctx.storage.deleteAlarm();
+			return;
+		}
+		const next = Math.max(Math.min(...times), Date.now());
+		// Avoid a storage write when the alarm is already set for that moment.
+		if ((await this.ctx.storage.getAlarm()) !== next) await this.ctx.storage.setAlarm(next);
 	}
 
 	/** Hands one Outbox message to Email Service and files the outcome. */
@@ -1148,6 +1222,7 @@ export class MailboxDO extends DurableObject<Env> {
 					now,
 					id,
 				);
+				this.recordContacts([...outgoing.to, ...outgoing.cc, ...outgoing.bcc], "sent", now);
 				this.recomputeThread(row.thread_id);
 			});
 			this.broadcast({ type: "threads.changed", threadIds: [row.thread_id] });
@@ -1173,6 +1248,347 @@ export class MailboxDO extends DurableObject<Env> {
 			return fail("rejected", error.message);
 		} finally {
 			this.inFlight.delete(id);
+		}
+	}
+
+	// ---- Snooze ----------------------------------------------------------------
+
+	/** Takes conversations out of the inbox until `until`, when they come back unread. */
+	async snoozeThreads(threadIds: string[], until: number): Promise<Result<{ threadIds: string[] }>> {
+		if (threadIds.length > MAX_BATCH) return fail("invalid", `At most ${MAX_BATCH} threads at a time`);
+		if (until <= Date.now()) return fail("invalid", "Pick a time in the future");
+		const existing = this.sql
+			.exec<{ id: string }>("SELECT id FROM threads WHERE id IN (SELECT value FROM json_each(?))", JSON.stringify(threadIds))
+			.toArray()
+			.map((r) => r.id);
+		if (!existing.length) return fail("not_found", "Conversation not found");
+
+		const now = Date.now();
+		this.ctx.storage.transactionSync(() => {
+			for (const id of existing) {
+				this.sql.exec("INSERT OR REPLACE INTO snoozes (thread_id, until, created_at) VALUES (?, ?, ?)", id, until, now);
+				this.sql.exec(
+					`DELETE FROM message_labels WHERE label_id = 'INBOX' AND message_id IN (SELECT id FROM messages WHERE thread_id = ?)`,
+					id,
+				);
+				this.sql.exec(
+					`INSERT OR IGNORE INTO message_labels (message_id, label_id, added_at)
+					 SELECT id, 'SNOOZED', ? FROM messages WHERE thread_id = ?`,
+					now,
+					id,
+				);
+				this.refreshThreadLabels(id);
+			}
+		});
+		await this.scheduleAlarm();
+		this.broadcast({ type: "threads.changed", threadIds: existing });
+		return ok({ threadIds: existing });
+	}
+
+	/** Ends a snooze now: the conversation goes back to the inbox. */
+	async unsnoozeThreads(threadIds: string[]): Promise<Result<{ threadIds: string[] }>> {
+		if (threadIds.length > MAX_BATCH) return fail("invalid", `At most ${MAX_BATCH} threads at a time`);
+		const woken = this.ctx.storage.transactionSync(() => {
+			const ids = this.cancelSnoozes(threadIds);
+			for (const id of ids) this.returnToInbox(id, false);
+			return ids;
+		});
+		await this.scheduleAlarm();
+		if (woken.length) this.broadcast({ type: "threads.changed", threadIds: woken });
+		return ok({ threadIds: woken });
+	}
+
+	/** Drops snoozes for these threads (if any) and returns which ones were snoozed. Call inside a transaction. */
+	private cancelSnoozes(threadIds: string[]): string[] {
+		const ids = this.sql
+			.exec<{ thread_id: string }>("SELECT thread_id FROM snoozes WHERE thread_id IN (SELECT value FROM json_each(?))", JSON.stringify(threadIds))
+			.toArray()
+			.map((r) => r.thread_id);
+		for (const id of ids) {
+			this.sql.exec("DELETE FROM snoozes WHERE thread_id = ?", id);
+			this.sql.exec(
+				`DELETE FROM message_labels WHERE label_id = 'SNOOZED' AND message_id IN (SELECT id FROM messages WHERE thread_id = ?)`,
+				id,
+			);
+			this.refreshThreadLabels(id);
+		}
+		return ids;
+	}
+
+	/** Puts a conversation back in the inbox, optionally unread and at the top. Call inside a transaction. */
+	private returnToInbox(threadId: string, asNew: boolean): void {
+		const now = Date.now();
+		this.sql.exec(
+			`INSERT OR IGNORE INTO message_labels (message_id, label_id, added_at)
+			 SELECT id, 'INBOX', ? FROM messages m WHERE thread_id = ?
+			   AND NOT EXISTS (SELECT 1 FROM message_labels x WHERE x.message_id = m.id AND x.label_id IN ('DRAFT', 'OUTBOX'))`,
+			now,
+			threadId,
+		);
+		if (asNew) {
+			this.sql.exec(
+				`INSERT OR IGNORE INTO message_labels (message_id, label_id, added_at)
+				 SELECT id, 'UNREAD', ? FROM messages m WHERE thread_id = ?
+				   AND NOT EXISTS (SELECT 1 FROM message_labels x WHERE x.message_id = m.id AND x.label_id IN ('DRAFT', 'OUTBOX'))
+				 ORDER BY received_at DESC LIMIT 1`,
+				now,
+				threadId,
+			);
+			// Back at the top of the inbox, dated when it returned.
+			this.sql.exec("UPDATE threads SET last_message_at = MAX(last_message_at, ?) WHERE id = ?", now, threadId);
+		}
+		this.refreshThreadLabels(threadId);
+	}
+
+	private wakeSnoozes(): void {
+		const woken = this.ctx.storage.transactionSync(() => {
+			const due = this.sql
+				.exec<{ thread_id: string }>("SELECT thread_id FROM snoozes WHERE until <= ? LIMIT ?", Date.now(), MAX_BATCH)
+				.toArray()
+				.map((r) => r.thread_id);
+			const ids = this.cancelSnoozes(due);
+			for (const id of ids) this.returnToInbox(id, true);
+			return ids;
+		});
+		if (woken.length) this.broadcast({ type: "threads.changed", threadIds: woken });
+	}
+
+	// ---- Emptying Trash and Spam ----------------------------------------------------
+
+	/** Deletes messages that have been in Trash or Spam for 30 days, with their files. */
+	private async purgeExpired(): Promise<void> {
+		const ids = this.sql
+			.exec<{ message_id: string }>(
+				`SELECT DISTINCT message_id FROM message_labels
+				 WHERE label_id IN ('TRASH', 'SPAM') AND coalesce(added_at, 0) <= ? LIMIT ?`,
+				Date.now() - RETENTION_MS,
+				PURGE_BATCH,
+			)
+			.toArray()
+			.map((r) => r.message_id);
+		if (!ids.length) return;
+		const { keys, threadIds } = this.ctx.storage.transactionSync(() => {
+			const json = JSON.stringify(ids);
+			const inIds = "SELECT value FROM json_each(?)";
+			const threadIds = this.sql
+				.exec<{ thread_id: string }>(`SELECT DISTINCT thread_id FROM messages WHERE id IN (${inIds})`, json)
+				.toArray()
+				.map((r) => r.thread_id);
+			const keys = this.sql
+				.exec<{ k: string }>(
+					`SELECT raw_key AS k FROM messages WHERE id IN (${inIds}) AND raw_key IS NOT NULL
+					 UNION ALL SELECT html_key FROM messages WHERE id IN (${inIds}) AND html_key IS NOT NULL
+					 UNION ALL SELECT r2_key FROM attachments WHERE message_id IN (${inIds})`,
+					json,
+					json,
+					json,
+				)
+				.toArray()
+				.map((r) => r.k);
+			this.sql.exec(`DELETE FROM attachments WHERE message_id IN (${inIds})`, json);
+			this.sql.exec(`DELETE FROM message_labels WHERE message_id IN (${inIds})`, json);
+			this.sql.exec(`DELETE FROM messages WHERE id IN (${inIds})`, json);
+			for (const id of threadIds) this.recomputeThread(id);
+			return { keys, threadIds };
+		});
+		for (let i = 0; i < keys.length; i += 1000) await this.env.BUCKET.delete(keys.slice(i, i + 1000));
+		this.broadcast({ type: "threads.changed", threadIds });
+	}
+
+	// ---- Contacts ----------------------------------------------------------------
+
+	/** Remembers people this mailbox writes to or hears from. Call inside a transaction. */
+	private recordContacts(people: EmailAddress[], direction: "sent" | "received", at: number): void {
+		const column = direction === "sent" ? "sent_count" : "received_count";
+		for (const p of people) {
+			if (!p.address) continue;
+			this.sql.exec(
+				`INSERT INTO contacts (address, name, ${column}, last_contacted) VALUES (?, ?, 1, ?)
+				 ON CONFLICT (address) DO UPDATE SET
+					${column} = ${column} + 1,
+					last_contacted = MAX(last_contacted, excluded.last_contacted),
+					name = CASE WHEN excluded.name != '' THEN excluded.name ELSE contacts.name END`,
+				p.address,
+				p.name ?? "",
+				at,
+			);
+		}
+	}
+
+	/**
+	 * Address suggestions: names or addresses starting with `query` (or a
+	 * domain starting with it), people you've written to first.
+	 */
+	async listContacts(query: string, limit: number, exclude: string[] = []): Promise<Contact[]> {
+		const q = query.trim().toLowerCase().replace(/[\\%_]/g, (c) => `\\${c}`);
+		return this.sql
+			.exec<{ name: string; address: string }>(
+				`SELECT name, address FROM contacts
+				 WHERE (?1 = '' OR address LIKE ?1 || '%' ESCAPE '\\' OR address LIKE '%@' || ?1 || '%' ESCAPE '\\'
+				        OR lower(name) LIKE ?1 || '%' ESCAPE '\\' OR lower(name) LIKE '% ' || ?1 || '%' ESCAPE '\\')
+				   AND address NOT IN (SELECT value FROM json_each(?2))
+				 ORDER BY sent_count DESC, received_count DESC, last_contacted DESC
+				 LIMIT ?3`,
+				q,
+				JSON.stringify(exclude),
+				limit,
+			)
+			.toArray();
+	}
+
+	// ---- Filters ---------------------------------------------------------------------
+
+	async listFilters(): Promise<MailFilter[]> {
+		return this.sql
+			.exec<{ id: string; query: string; actions: string; created_at: number }>("SELECT * FROM filters ORDER BY created_at")
+			.toArray()
+			.map((f) => ({ id: f.id, query: f.query, actions: JSON.parse(f.actions), createdAt: f.created_at }));
+	}
+
+	async createFilter(query: string, actions: FilterActions, applyToExisting: boolean): Promise<Result<{ filter: MailFilter; applied: number }>> {
+		const parsed = parseSearch(query);
+		if (!parsed.length) return fail("invalid", "A filter needs search criteria");
+		if (!Object.entries(actions).some(([k, v]) => (k === "labelId" ? v !== null : v === true))) {
+			return fail("invalid", "Choose at least one action");
+		}
+		if (actions.labelId) {
+			const label = this.sql.exec<{ type: string }>("SELECT type FROM labels WHERE id = ?", actions.labelId).toArray()[0];
+			if (label?.type !== "user") return fail("invalid", "Unknown label");
+		}
+		if (this.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM filters").one().n >= MAX_FILTERS) {
+			return fail("invalid", `At most ${MAX_FILTERS} filters`);
+		}
+		const filter: MailFilter = { id: crypto.randomUUID(), query: query.trim(), actions, createdAt: Date.now() };
+		this.sql.exec(
+			"INSERT INTO filters (id, query, actions, created_at) VALUES (?, ?, ?, ?)",
+			filter.id,
+			filter.query,
+			JSON.stringify(actions),
+			filter.createdAt,
+		);
+
+		let applied = 0;
+		if (applyToExisting) {
+			const compiled = this.compileFilter(filter.query);
+			if (compiled) {
+				const threadIds = this.sql
+					.exec<{ thread_id: string }>(
+						`SELECT DISTINCT m.thread_id FROM messages m WHERE (${compiled.where})
+						   AND NOT EXISTS (SELECT 1 FROM message_labels x WHERE x.message_id = m.id AND x.label_id IN ('TRASH', 'SPAM', 'DRAFT', 'OUTBOX'))
+						 LIMIT ${MAX_BATCH}`,
+						...compiled.params,
+					)
+					.toArray()
+					.map((r) => r.thread_id);
+				const { add, remove } = filterDelta(actions);
+				if (threadIds.length) {
+					const result = await this.modifyThreads(threadIds, add, remove);
+					applied = result.ok ? result.value.threadIds.length : 0;
+				}
+			}
+		}
+		return ok({ filter, applied });
+	}
+
+	async deleteFilter(id: string): Promise<Result<null>> {
+		return this.sql.exec("DELETE FROM filters WHERE id = ?", id).rowsWritten ? ok(null) : fail("not_found", "Filter not found");
+	}
+
+	private compileFilter(query: string): { where: string; params: (string | number)[] } | null {
+		const labels = this.sql.exec<{ id: string; name: string }>("SELECT id, name FROM labels WHERE type = 'user'").toArray();
+		const compiled = compileSearch(parseSearch(query), { labels, now: Date.now(), tzOffsetMinutes: 0 });
+		return compiled.where ? { where: compiled.where, params: compiled.params } : null;
+	}
+
+	/** Runs every filter against a newly received message and applies the matching ones. Call inside a transaction. */
+	private applyFilters(messageId: string): void {
+		const filters = this.sql.exec<{ query: string; actions: string }>("SELECT query, actions FROM filters ORDER BY created_at").toArray();
+		const now = Date.now();
+		for (const f of filters) {
+			const compiled = this.compileFilter(f.query);
+			if (!compiled) continue;
+			let matches = false;
+			try {
+				matches =
+					this.sql
+						.exec(`SELECT 1 FROM messages m WHERE m.id = ?${compiled.params.length + 1} AND (${compiled.where})`, ...compiled.params, messageId)
+						.toArray().length > 0;
+			} catch (err) {
+				console.warn("Filter failed", { query: f.query, err: String(err) });
+			}
+			if (!matches) continue;
+			const { add, remove } = filterDelta(JSON.parse(f.actions) as FilterActions);
+			for (const l of add) {
+				this.sql.exec(
+					"INSERT OR IGNORE INTO message_labels (message_id, label_id, added_at) SELECT ?, id, ? FROM labels WHERE id = ?",
+					messageId,
+					now,
+					l,
+				);
+			}
+			for (const l of remove) this.sql.exec("DELETE FROM message_labels WHERE message_id = ? AND label_id = ?", messageId, l);
+		}
+	}
+
+	// ---- Vacation responder ------------------------------------------------------------
+
+	/**
+	 * Sends the vacation reply for a message that just arrived, if the
+	 * responder is on and this sender hasn't had one recently. Never throws:
+	 * a failed auto-reply must not fail delivery.
+	 */
+	async autoReply(input: {
+		messageId: string;
+		mailbox: EmailAddress;
+		from: EmailAddress;
+		subject: string;
+		inReplyTo: string | null;
+		references: string[];
+		automated: boolean;
+	}): Promise<"sent" | "skipped"> {
+		try {
+			const { vacation } = await this.getSettings();
+			const now = Date.now();
+			const sender = input.from.address;
+			if (!vacation.enabled || !vacation.message.trim() || input.automated || !sender) return "skipped";
+			if ((vacation.startAt !== null && now < vacation.startAt) || (vacation.endAt !== null && now > vacation.endAt)) return "skipped";
+			if (sender === input.mailbox.address.toLowerCase()) return "skipped";
+			const labels = this.sql
+				.exec<{ label_id: string }>("SELECT label_id FROM message_labels WHERE message_id = ?", input.messageId)
+				.toArray()
+				.map((r) => r.label_id);
+			if (labels.includes(SystemLabel.SPAM) || labels.includes(SystemLabel.TRASH)) return "skipped";
+			if (vacation.contactsOnly) {
+				const known = this.sql.exec<{ n: number }>("SELECT sent_count AS n FROM contacts WHERE address = ?", sender).toArray()[0];
+				if (!known?.n) return "skipped";
+			}
+			const last = this.sql.exec<{ sent_at: number }>("SELECT sent_at FROM vacation_replies WHERE address = ?", sender).toArray()[0];
+			if (last && now - last.sent_at < VACATION_INTERVAL_MS) return "skipped";
+
+			const stored = this.sql.exec<{ message_id: string | null }>("SELECT message_id FROM messages WHERE id = ?", input.messageId).toArray()[0];
+			const original = stored?.message_id ?? null;
+			const references = [...input.references, ...(original ? [original] : [])].slice(-MAX_REFERENCES);
+			const headers: Record<string, string> = { "Auto-Submitted": "auto-replied" };
+			if (original) headers["In-Reply-To"] = `<${original}>`;
+			const refs = referencesHeader(references);
+			if (refs) headers.References = refs;
+			// Record first: if sending throws halfway we'd rather miss a reply than send two.
+			this.sql.exec("INSERT OR REPLACE INTO vacation_replies (address, sent_at) VALUES (?, ?)", sender, now);
+			await transport.send(this.env, {
+				from: input.mailbox.name ? { name: input.mailbox.name, email: input.mailbox.address } : input.mailbox.address,
+				to: sender,
+				subject: cleanSubject(vacation.subject.trim() || `Re: ${input.subject}`.trim()),
+				text: vacation.message,
+				html: vacation.message
+					.split(/\n{2,}/)
+					.map((p) => `<p>${p.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`).replace(/\n/g, "<br>")}</p>`)
+					.join(""),
+				headers,
+			} as EmailMessageBuilder);
+			return "sent";
+		} catch (err) {
+			console.warn("Vacation reply failed", String(err));
+			return "skipped";
 		}
 	}
 

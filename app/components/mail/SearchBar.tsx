@@ -35,7 +35,14 @@ const FOLDERS = [
 ] as const;
 
 /** Gmail-style search box with an advanced-search panel. Searches go to /mail/:id/search?q=… */
-export function SearchBar({ mailboxId, labels }: { mailboxId: string; labels: Label[] | undefined }) {
+interface SearchBarProps {
+	mailboxId: string;
+	labels: Label[] | undefined;
+	/** "Create filter" in the options panel. */
+	onCreateFilter: (query: string) => void;
+}
+
+export function SearchBar({ mailboxId, labels, onCreateFilter }: SearchBarProps) {
 	const navigate = useNavigate();
 	const { folder } = useParams();
 	const [params] = useSearchParams();
@@ -200,6 +207,18 @@ export function SearchBar({ mailboxId, labels }: { mailboxId: string; labels: La
 						Has attachment
 					</label>
 					<div className="flex justify-end gap-2 pt-2">
+						<Button
+							type="button"
+							variant="ghost"
+							className="mr-auto"
+							disabled={!buildSearchQuery(fields)}
+							onClick={() => {
+								setAdvanced(false);
+								onCreateFilter(buildSearchQuery(fields));
+							}}
+						>
+							Create filter
+						</Button>
 						<Button type="button" variant="ghost" onClick={() => setFields(EMPTY_SEARCH_FIELDS)}>
 							Clear filter
 						</Button>

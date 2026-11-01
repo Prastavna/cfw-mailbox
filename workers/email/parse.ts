@@ -29,6 +29,21 @@ export interface ParsedMessage {
 	html: string | null;
 	attachments: ParsedAttachment[];
 	authResults: AuthResults | null;
+	/** Bulk, list or machine-sent mail (or a bounce/auto-reply) that must never get an automatic reply. */
+	automated: boolean;
+}
+
+const NO_REPLY_SENDER = /^(mailer-daemon|postmaster|no-?reply|do-?not-?reply|bounces?|notifications?)([+.@-]|$)/i;
+
+/** RFC 3834: don't auto-reply to auto-generated, list or bulk mail, or to bounces. */
+export function isAutomated(header: (key: string) => string | null, from: string, contentType: string | null): boolean {
+	const autoSubmitted = header("auto-submitted")?.trim().toLowerCase();
+	if (autoSubmitted && autoSubmitted !== "no") return true;
+	if (/^(bulk|list|junk)$/i.test(header("precedence")?.trim() ?? "")) return true;
+	if (header("list-id") || header("list-unsubscribe") || header("x-autoreply") || header("x-autorespond")) return true;
+	if (/\b(all|oof|autoreply)\b/i.test(header("x-auto-response-suppress") ?? "")) return true;
+	if (/multipart\/report/i.test(contentType ?? "")) return true;
+	return !from || NO_REPLY_SENDER.test(from);
 }
 
 export async function parseMessage(raw: Uint8Array): Promise<ParsedMessage> {
@@ -53,6 +68,7 @@ export async function parseMessage(raw: Uint8Array): Promise<ParsedMessage> {
 		html: email.html?.trim() ? email.html : null,
 		attachments: email.attachments.map(toAttachment),
 		authResults: parseAuthResults(header("authentication-results")),
+		automated: isAutomated(header, from?.address ?? "", header("content-type")),
 	};
 }
 

@@ -27,7 +27,8 @@ function addressField(a: EmailAddress): string | { name: string; email: string }
 	return a.name ? { name: a.name, email: a.address } : a.address;
 }
 
-function referencesHeader(ids: string[]): string | null {
+/** A References header value: the newest IDs that fit. */
+export function referencesHeader(ids: string[]): string | null {
 	const kept: string[] = [];
 	let bytes = 0;
 	for (const id of [...ids].reverse()) {

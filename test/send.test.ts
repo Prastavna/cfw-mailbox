@@ -1,7 +1,7 @@
 import { env, exports } from "cloudflare:workers";
 import { runDurableObjectAlarm } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { DraftDetail, Mailbox, MailboxSettings, SendResult, ThreadDetail, ThreadPage } from "../shared/api";
+import { DEFAULT_VACATION, type DraftDetail, type Mailbox, type MailboxSettings, type SendResult, type ThreadDetail, type ThreadPage } from "../shared/api";
 import { handleInbound } from "../workers/email/inbound";
 import { transport } from "../workers/email/outbound";
 import { getMailbox } from "../workers/mailbox/MailboxDO";
@@ -247,9 +247,9 @@ describe("sending", () => {
 describe("settings", () => {
 	it("stores a signature and the undo-send delay", async () => {
 		const { api } = await setup(5);
-		expect(await get<MailboxSettings>(`${api}/settings`)).toEqual({ signature: "", undoSendSeconds: 5 });
+		expect(await get<MailboxSettings>(`${api}/settings`)).toEqual({ signature: "", undoSendSeconds: 5, vacation: DEFAULT_VACATION });
 		const res = await send(`${api}/settings`, { signature: "Me\nCEO" }, "PATCH");
-		expect(await res.json()).toEqual({ signature: "Me\nCEO", undoSendSeconds: 5 });
+		expect(await res.json()).toEqual({ signature: "Me\nCEO", undoSendSeconds: 5, vacation: DEFAULT_VACATION });
 		expect((await send(`${api}/settings`, { undoSendSeconds: 7 }, "PATCH")).status).toBe(400);
 	});
 });

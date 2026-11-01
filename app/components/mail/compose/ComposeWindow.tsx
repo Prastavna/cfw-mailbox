@@ -426,6 +426,7 @@ function ComposeForm({ win, mailbox, initial }: { win: ComposeWindow; mailbox: M
 			<RecipientInput
 				ref={toRef}
 				label="To"
+				mailboxId={mailbox.id}
 				value={to}
 				onChange={setField("to", setTo)}
 				autoFocus={!initial.to.length && !initial.parent}
@@ -444,8 +445,8 @@ function ComposeForm({ win, mailbox, initial }: { win: ComposeWindow; mailbox: M
 					</div>
 				}
 			/>
-			{showCc && <RecipientInput ref={ccRef} label="Cc" value={cc} onChange={setField("cc", setCc)} autoFocus={!initial.cc.length} />}
-			{showBcc && <RecipientInput ref={bccRef} label="Bcc" value={bcc} onChange={setField("bcc", setBcc)} autoFocus={!initial.bcc.length} />}
+			{showCc && <RecipientInput ref={ccRef} label="Cc" mailboxId={mailbox.id} value={cc} onChange={setField("cc", setCc)} autoFocus={!initial.cc.length} />}
+			{showBcc && <RecipientInput ref={bccRef} label="Bcc" mailboxId={mailbox.id} value={bcc} onChange={setField("bcc", setBcc)} autoFocus={!initial.bcc.length} />}
 			<input
 				aria-label="Subject"
 				placeholder="Subject"

@@ -1,5 +1,4 @@
 import { Mail, Menu, Settings } from "lucide-react";
-import { useState } from "react";
 import { Link } from "react-router";
 import type { Label, MailboxAccess, Me } from "../../../shared/api";
 import { Button } from "~/components/ui/button";
@@ -8,7 +7,7 @@ import type { LiveStatus } from "~/lib/api";
 import { cn } from "~/lib/utils";
 import { AccountSwitcher } from "./AccountSwitcher";
 import { SearchBar } from "./SearchBar";
-import { SettingsDialog } from "./SettingsDialog";
+import type { SettingsTab } from "./SettingsDialog";
 
 interface HeaderProps {
 	me: Me;
@@ -16,10 +15,10 @@ interface HeaderProps {
 	live: LiveStatus;
 	labels: Label[] | undefined;
 	onToggleSidebar: () => void;
+	onOpenSettings: (tab?: SettingsTab, filterQuery?: string) => void;
 }
 
-export function Header({ me, mailbox, live, labels, onToggleSidebar }: HeaderProps) {
-	const [settingsOpen, setSettingsOpen] = useState(false);
+export function Header({ me, mailbox, live, labels, onToggleSidebar, onOpenSettings }: HeaderProps) {
 	return (
 		<header className="flex h-16 shrink-0 items-center gap-2 px-2 sm:px-4">
 			<Button variant="ghost" size="icon-lg" className="rounded-full" onClick={onToggleSidebar} aria-label="Main menu">
@@ -31,7 +30,7 @@ export function Header({ me, mailbox, live, labels, onToggleSidebar }: HeaderPro
 			</Link>
 
 			<div className="flex min-w-0 flex-1 justify-center lg:justify-start">
-				<SearchBar mailboxId={mailbox.id} labels={labels} />
+				<SearchBar mailboxId={mailbox.id} labels={labels} onCreateFilter={(q) => onOpenSettings("filters", q)} />
 			</div>
 
 			<Tooltip>
@@ -51,13 +50,12 @@ export function Header({ me, mailbox, live, labels, onToggleSidebar }: HeaderPro
 			</Tooltip>
 			<Tooltip>
 				<TooltipTrigger asChild>
-					<Button variant="ghost" size="icon-lg" className="rounded-full" onClick={() => setSettingsOpen(true)} aria-label="Settings">
+					<Button variant="ghost" size="icon-lg" className="rounded-full" onClick={() => onOpenSettings()} aria-label="Settings">
 						<Settings className="size-5" />
 					</Button>
 				</TooltipTrigger>
 				<TooltipContent>Settings</TooltipContent>
 			</Tooltip>
-			<SettingsDialog mailboxId={mailbox.id} address={mailbox.address} open={settingsOpen} onOpenChange={setSettingsOpen} />
 			<AccountSwitcher me={me} current={mailbox} />
 		</header>
 	);

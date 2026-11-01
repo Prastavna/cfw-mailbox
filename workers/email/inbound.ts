@@ -82,7 +82,23 @@ export async function handleInbound(message: InboundMessage, env: Env): Promise<
 		};
 
 		const result = await mailbox.ingest(input);
-		if (result.status === "duplicate") await env.BUCKET.delete(uploaded);
+		if (result.status === "duplicate") {
+			await env.BUCKET.delete(uploaded);
+			return;
+		}
+		// The message is stored now: a vacation reply that fails (even at the RPC level) must not
+		// reach the catch below, which would delete the stored message's files.
+		await mailbox
+			.autoReply({
+				messageId: id,
+				mailbox: { name: mailboxEntry.displayName, address: mailboxEntry.address },
+				from: input.from,
+				subject: parsed.subject,
+				inReplyTo: parsed.inReplyTo,
+				references: parsed.references,
+				automated: parsed.automated,
+			})
+			.catch((err) => console.warn("Vacation reply failed", String(err)));
 	} catch (err) {
 		await env.BUCKET.delete(uploaded).catch(() => {});
 		throw err;
@@ -106,5 +122,6 @@ function unparseable(message: InboundMessage): ParsedMessage {
 		html: null,
 		attachments: [],
 		authResults: null,
+		automated: true,
 	};
 }

@@ -23,6 +23,8 @@ export const SystemLabel = {
 	UNREAD: "UNREAD",
 	/** Sent but still inside the undo-send window (or waiting to retry). */
 	OUTBOX: "OUTBOX",
+	/** Out of the inbox until its snooze time. */
+	SNOOZED: "SNOOZED",
 } as const;
 export type SystemLabelId = (typeof SystemLabel)[keyof typeof SystemLabel];
 
@@ -196,6 +198,70 @@ export const MAILBOX_MIGRATIONS: readonly Migration[] = [
 				.exec<{ id: string; html_body: string }>("SELECT id, html_body FROM messages WHERE text_body IS NULL AND html_body IS NOT NULL")
 				.toArray();
 			for (const r of rows) sql.exec("UPDATE messages SET text_body = ? WHERE id = ?", htmlToText(r.html_body).slice(0, TEXT_LIMIT), r.id);
+		},
+	},
+	{
+		version: 5,
+		name: "organising",
+		sql: `
+			INSERT OR IGNORE INTO labels (id, name, type, color, created_at) VALUES ('SNOOZED', 'SNOOZED', 'system', NULL, 0);
+
+			-- When a label was put on a message; used to empty Trash and Spam after 30 days.
+			ALTER TABLE message_labels ADD COLUMN added_at INTEGER;
+			CREATE INDEX idx_message_labels_added ON message_labels(label_id, added_at);
+
+			CREATE TABLE snoozes (
+				thread_id TEXT PRIMARY KEY,
+				until INTEGER NOT NULL,
+				created_at INTEGER NOT NULL
+			);
+			CREATE INDEX idx_snoozes_until ON snoozes(until);
+
+			-- People this mailbox has corresponded with, for recipient autocomplete.
+			CREATE TABLE contacts (
+				address TEXT PRIMARY KEY,
+				name TEXT NOT NULL DEFAULT '',
+				sent_count INTEGER NOT NULL DEFAULT 0,
+				received_count INTEGER NOT NULL DEFAULT 0,
+				last_contacted INTEGER NOT NULL
+			);
+
+			CREATE TABLE filters (
+				id TEXT PRIMARY KEY,
+				query TEXT NOT NULL,
+				actions TEXT NOT NULL,
+				created_at INTEGER NOT NULL
+			);
+
+			-- Who got a vacation reply, and when (one per sender every few days).
+			CREATE TABLE vacation_replies (
+				address TEXT PRIMARY KEY,
+				sent_at INTEGER NOT NULL
+			);
+
+			INSERT INTO contacts (address, name, received_count, last_contacted)
+			SELECT m.from_address, MAX(coalesce(m.from_name, '')), COUNT(*), MAX(m.received_at)
+			FROM messages m
+			WHERE m.from_address != ''
+			  AND NOT EXISTS (SELECT 1 FROM message_labels ml WHERE ml.message_id = m.id AND ml.label_id IN ('SENT', 'DRAFT', 'OUTBOX'))
+			GROUP BY m.from_address;
+
+			INSERT INTO contacts (address, name, sent_count, last_contacted)
+			SELECT json_extract(r.value, '$.address'), MAX(coalesce(json_extract(r.value, '$.name'), '')), COUNT(*), MAX(m.received_at)
+			FROM messages m
+			JOIN message_labels ml ON ml.message_id = m.id AND ml.label_id = 'SENT',
+			     json_each(json_array(json(m."to"), json(m.cc), json(m.bcc))) AS lists,
+			     json_each(lists.value) AS r
+			WHERE true
+			GROUP BY json_extract(r.value, '$.address')
+			ON CONFLICT (address) DO UPDATE SET
+				sent_count = excluded.sent_count,
+				last_contacted = MAX(contacts.last_contacted, excluded.last_contacted),
+				name = CASE WHEN contacts.name = '' THEN excluded.name ELSE contacts.name END;
+		`,
+		// Existing Trash and Spam start their 30 days now.
+		run: (sql) => {
+			sql.exec("UPDATE message_labels SET added_at = ? WHERE label_id IN ('TRASH', 'SPAM')", Date.now());
 		},
 	},
 ];

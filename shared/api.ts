@@ -67,6 +67,8 @@ export interface ThreadSummary {
 	lastMessageAt: number;
 	labelIds: string[];
 	unread: boolean;
+	/** When a snoozed conversation comes back to the inbox (ms since epoch). */
+	snoozedUntil: number | null;
 }
 
 export interface ThreadPage {
@@ -132,7 +134,7 @@ export type MailboxEvent =
 export const ALL_MAIL = "ALL";
 
 /** Labels the server manages itself; they can't be added or removed by hand. */
-export const MANAGED_LABELS = ["SENT", "DRAFT", "OUTBOX"] as const;
+export const MANAGED_LABELS = ["SENT", "DRAFT", "OUTBOX", "SNOOZED"] as const;
 
 export interface ModifyThreadsRequest {
 	threadIds: string[];
@@ -205,11 +207,73 @@ export interface SendResult {
 	sendAt: number;
 }
 
+export interface VacationSettings {
+	enabled: boolean;
+	/** Empty: "Re: <their subject>". */
+	subject: string;
+	/** Plain text. */
+	message: string;
+	/** Optional window (ms since epoch); outside it no replies are sent. */
+	startAt: number | null;
+	endAt: number | null;
+	/** Only reply to people this mailbox has written to. */
+	contactsOnly: boolean;
+}
+
 export interface MailboxSettings {
 	/** Plain text, added below new messages and replies. */
 	signature: string;
 	/** How long "Undo" is offered after Send, in seconds (0 sends at once). */
 	undoSendSeconds: number;
+	vacation: VacationSettings;
+}
+
+export const DEFAULT_VACATION: VacationSettings = {
+	enabled: false,
+	subject: "",
+	message: "",
+	startAt: null,
+	endAt: null,
+	contactsOnly: false,
+};
+
+// ---- Organising ----------------------------------------------------------------
+
+export interface SnoozeRequest {
+	threadIds: string[];
+	/** When the conversations come back (ms since epoch). */
+	until: number;
+}
+
+export interface Contact {
+	name: string;
+	address: string;
+}
+
+/** What a filter does to matching incoming mail. */
+export interface FilterActions {
+	archive: boolean;
+	markRead: boolean;
+	star: boolean;
+	important: boolean;
+	trash: boolean;
+	/** A user label to apply. */
+	labelId: string | null;
+}
+
+export interface MailFilter {
+	id: string;
+	/** Search syntax, e.g. `from:news@example.com has:attachment`. */
+	query: string;
+	actions: FilterActions;
+	createdAt: number;
+}
+
+export interface CreateFilterRequest {
+	query: string;
+	actions: FilterActions;
+	/** Also apply to conversations already in the mailbox. */
+	applyToExisting?: boolean;
 }
 
 export const UNDO_SEND_CHOICES = [0, 5, 10, 20, 30] as const;

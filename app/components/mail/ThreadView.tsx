@@ -14,7 +14,10 @@ import {
 } from "~/components/ui/dropdown-menu";
 import { Skeleton } from "~/components/ui/skeleton";
 import { Actions, type MailActions } from "~/lib/actions";
-import { rawMessageUrl, useThread } from "~/lib/api";
+import { type InfiniteData, useQueryClient } from "@tanstack/react-query";
+import type { ThreadPage } from "../../../shared/api";
+import { queryKeys, rawMessageUrl, useThread } from "~/lib/api";
+import { listCursor, useShortcuts } from "~/lib/shortcuts";
 import { replyRecipients } from "~/lib/compose";
 import { type Composer, draftsApi } from "~/lib/compose-store";
 import { visibleLabelChips } from "~/lib/folders";
@@ -41,6 +44,9 @@ interface ThreadViewProps {
 	labels: Label[] | undefined;
 	actions: MailActions;
 	composer: Composer;
+	/** The list this conversation was opened from, for j/k. */
+	listKey: string;
+	hrefFor: (threadId: string) => string;
 }
 
 const isUnsent = (m: MessageDetail) => m.labelIds.includes("DRAFT") || m.labelIds.includes("OUTBOX");
@@ -48,7 +54,7 @@ const isUnsent = (m: MessageDetail) => m.labelIds.includes("DRAFT") || m.labelId
 /** How many collapsed messages in the middle of a thread before they fold into "N older messages". */
 const FOLD_THRESHOLD = 3;
 
-export function ThreadView({ mailboxId, mailboxAddress, threadId, backHref, currentLabelId, labels, actions, composer }: ThreadViewProps) {
+export function ThreadView({ mailboxId, mailboxAddress, threadId, backHref, currentLabelId, labels, actions, composer, listKey, hrefFor }: ThreadViewProps) {
 	const { data, isPending, isError, error } = useThread(mailboxId, threadId);
 	const all = data?.messages ?? [];
 	// Drafts (and messages waiting to send) sit below the conversation, like Gmail.
@@ -60,6 +66,41 @@ export function ThreadView({ mailboxId, mailboxAddress, threadId, backHref, curr
 	const [expanded, setExpanded] = useState<Set<string>>(new Set());
 	const [unfolded, setUnfolded] = useState(false);
 	const initialised = useRef<string | null>(null);
+	const queryClient = useQueryClient();
+	const [snoozeOpen, setSnoozeOpen] = useState(false);
+
+	useEffect(() => {
+		listCursor.lastThreadId = threadId;
+	}, [threadId]);
+
+	/** j/k: the next older or newer conversation in the list this one came from. */
+	const step = (by: number) => {
+		const pages = queryClient.getQueryData<InfiniteData<ThreadPage>>(queryKeys.threads(mailboxId, listKey))?.pages;
+		const list = pages?.flatMap((p) => p.threads) ?? [];
+		const i = list.findIndex((t) => t.id === threadId);
+		const next = i >= 0 ? list[i + by] : undefined;
+		if (next) navigate(hrefFor(next.id));
+	};
+	const inTrashOrSpam = currentLabelId === "TRASH" || currentLabelId === "SPAM";
+	const back = (ok: boolean) => ok && navigate(backHref);
+	useShortcuts(
+		{
+			u: () => navigate(backHref),
+			j: () => step(1),
+			k: () => step(-1),
+			r: () => lastMessage && void composer.reply(lastMessage),
+			a: () => lastMessage && void composer.reply(lastMessage, canReplyAll),
+			f: () => lastMessage && void composer.forward(lastMessage),
+			e: () => !inTrashOrSpam && void actions.modify([threadId], Actions.archive, { message: "Conversation archived." }).then(back),
+			"#": () => currentLabelId !== "TRASH" && void actions.modify([threadId], Actions.trash, { message: "Conversation moved to Trash." }).then(back),
+			"!": () => currentLabelId !== "SPAM" && void actions.modify([threadId], Actions.spam, { message: "Conversation marked as spam." }).then(back),
+			s: () => data && void actions.modify([threadId], data.thread.labelIds.includes("STARRED") ? Actions.unstar : Actions.star),
+			U: () => void actions.modify([threadId], Actions.markUnread).then(back),
+			I: () => void actions.modify([threadId], Actions.markRead),
+			b: () => !inTrashOrSpam && setSnoozeOpen(true),
+		},
+		1,
+	);
 
 	// Gmail expands the newest message and any unread ones, then marks the conversation read.
 	useEffect(() => {
@@ -105,6 +146,8 @@ export function ThreadView({ mailboxId, mailboxAddress, threadId, backHref, curr
 						labels={labels}
 						actions={actions}
 						onDone={(effect) => effect !== "changed" && navigate(backHref)}
+						snoozeOpen={snoozeOpen}
+						onSnoozeOpenChange={setSnoozeOpen}
 					/>
 				)}
 			</div>

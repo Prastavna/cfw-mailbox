@@ -204,6 +204,48 @@ export function useMailActions(mailboxId: string) {
 		[snapshot, queryClient, prefix, mailboxId, restore],
 	);
 
+	// ---- Snooze ----------------------------------------------------------------
+
+	const unsnooze = useCallback(
+		async (threadIds: string[], undoing = false): Promise<boolean> => {
+			try {
+				await apiFetch(`/mailboxes/${mailboxId}/threads/unsnooze`, { method: "POST", body: JSON.stringify({ threadIds }) });
+				toast(undoing ? "Action undone." : `${threadIds.length === 1 ? "Conversation" : `${threadIds.length} conversations`} unsnoozed.`);
+				return true;
+			} catch (err) {
+				toast.error(`Couldn't unsnooze: ${(err as Error).message}`);
+				return false;
+			} finally {
+				resync();
+			}
+		},
+		[mailboxId, resync],
+	);
+
+	/** Snoozes conversations (optimistically out of the inbox), with an Undo that unsnoozes them. */
+	const snooze = useCallback(
+		async (threadIds: string[], until: number, label: string): Promise<boolean> => {
+			if (!threadIds.length) return false;
+			await queryClient.cancelQueries({ queryKey: prefix });
+			const saved = snapshot();
+			applyOptimistic(threadIds, ["SNOOZED"], ["INBOX"]);
+			try {
+				await apiFetch(`/mailboxes/${mailboxId}/threads/snooze`, { method: "POST", body: JSON.stringify({ threadIds, until }) });
+				toast(`${threadIds.length === 1 ? "Conversation" : `${threadIds.length} conversations`} snoozed until ${label}.`, {
+					action: { label: "Undo", onClick: () => void unsnooze(threadIds, true) },
+				});
+				return true;
+			} catch (err) {
+				restore(saved);
+				toast.error(`Couldn't snooze: ${(err as Error).message}`);
+				return false;
+			} finally {
+				resync();
+			}
+		},
+		[queryClient, prefix, snapshot, applyOptimistic, restore, resync, unsnooze, mailboxId],
+	);
+
 	// ---- Labels ----------------------------------------------------------------
 
 	const createLabel = useCallback(
@@ -232,8 +274,8 @@ export function useMailActions(mailboxId: string) {
 	);
 
 	return useMemo(
-		() => ({ modify, modifyMessage, deleteForever, createLabel, updateLabel, deleteLabel }),
-		[modify, modifyMessage, deleteForever, createLabel, updateLabel, deleteLabel],
+		() => ({ modify, modifyMessage, deleteForever, snooze, unsnooze, createLabel, updateLabel, deleteLabel }),
+		[modify, modifyMessage, deleteForever, snooze, unsnooze, createLabel, updateLabel, deleteLabel],
 	);
 }
 

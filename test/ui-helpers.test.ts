@@ -74,3 +74,16 @@ describe("optimistic list membership", () => {
 		expect(belongsTo("ALL", ["SPAM"])).toBe(false);
 	});
 });
+
+describe("snooze presets", () => {
+	it("follows Gmail's choices for the time of week", async () => {
+		const { snoozePresets } = await import("../app/lib/snooze");
+		const show = (now: Date) => snoozePresets(now).map((p) => `${p.label} ${p.until.getDay()}@${p.until.getHours()}`);
+		// Tuesday 10:00
+		expect(show(new Date(2026, 10, 3, 10))).toEqual(["Later today 2@18", "Tomorrow 3@8", "This weekend 6@8", "Next week 1@8"]);
+		// Friday 19:00: no "later today" or "this weekend"
+		expect(show(new Date(2026, 10, 6, 19))).toEqual(["Tomorrow 6@8", "Next week 1@8"]);
+		// Sunday: "Next week" would be tomorrow morning, so it isn't repeated
+		expect(show(new Date(2026, 10, 8, 9))).toEqual(["Later today 0@18", "Tomorrow 1@8"]);
+	});
+});

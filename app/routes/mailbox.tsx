@@ -1,7 +1,10 @@
 import { useEffect, useState } from "react";
-import { Link, Outlet, useLocation, useParams } from "react-router";
+import { Link, Outlet, useLocation, useNavigate, useParams } from "react-router";
 import { ComposeDock } from "~/components/mail/compose/ComposeWindow";
 import { Header } from "~/components/mail/Header";
+import { SettingsDialog, type SettingsTab } from "~/components/mail/SettingsDialog";
+import { ShortcutsHelp } from "~/components/mail/ShortcutsHelp";
+import { VacationBanner } from "~/components/mail/VacationBanner";
 import { Sidebar } from "~/components/mail/Sidebar";
 import { Sheet, SheetContent, SheetTitle } from "~/components/ui/sheet";
 import { TooltipProvider } from "~/components/ui/tooltip";
@@ -11,6 +14,7 @@ import { useMailActions } from "~/lib/actions";
 import { rememberMailbox, useLabels, useMailboxEvents, useMe } from "~/lib/api";
 import { useComposer } from "~/lib/compose-store";
 import type { MailboxContext } from "~/lib/mailbox-context";
+import { useShortcuts } from "~/lib/shortcuts";
 import { cn } from "~/lib/utils";
 
 const COLLAPSED_KEY = "cfw-mailbox:sidebar-collapsed";
@@ -45,6 +49,21 @@ function MailboxFrame({ me, mailbox }: { me: Me; mailbox: MailboxAccess }) {
 	const [collapsed, setCollapsed] = useState(false);
 	const [mobileOpen, setMobileOpen] = useState(false);
 	const location = useLocation();
+	const [settings, setSettings] = useState<{ open: boolean; tab: SettingsTab; filterQuery?: string }>({ open: false, tab: "general" });
+	const openSettings = (tab: SettingsTab = "general", filterQuery?: string) => setSettings({ open: true, tab, filterQuery });
+	const [helpOpen, setHelpOpen] = useState(false);
+	const navigate = useNavigate();
+	const go = (slug: string) => () => navigate(`/mail/${mailbox.id}/${slug}`);
+	useShortcuts({
+		c: () => composer.compose(),
+		"/": () => document.querySelector<HTMLInputElement>('input[aria-label="Search mail"]')?.focus(),
+		"?": () => setHelpOpen(true),
+		"g i": go("inbox"),
+		"g s": go("starred"),
+		"g t": go("sent"),
+		"g d": go("drafts"),
+		"g a": go("all"),
+	});
 
 	useEffect(() => rememberMailbox(mailbox.id), [mailbox.id]);
 	useEffect(() => {
@@ -71,7 +90,8 @@ function MailboxFrame({ me, mailbox }: { me: Me; mailbox: MailboxAccess }) {
 	return (
 		<TooltipProvider delayDuration={400}>
 			<div className="flex h-svh flex-col bg-mail-canvas text-foreground">
-				<Header me={me} mailbox={mailbox} live={live} labels={labels} onToggleSidebar={toggleSidebar} />
+				<Header me={me} mailbox={mailbox} live={live} labels={labels} onToggleSidebar={toggleSidebar} onOpenSettings={openSettings} />
+				<VacationBanner mailboxId={mailbox.id} onOpenSettings={() => openSettings("vacation")} />
 				<div className="flex min-h-0 flex-1">
 					<aside className={cn("hidden shrink-0 overflow-y-auto md:block", collapsed ? "w-[72px]" : "w-64")}>
 						<Sidebar mailboxId={mailbox.id} labels={labels} collapsed={collapsed} actions={actions} onCompose={() => composer.compose()} />
@@ -97,6 +117,16 @@ function MailboxFrame({ me, mailbox }: { me: Me; mailbox: MailboxAccess }) {
 					</main>
 				</div>
 				<ComposeDock mailbox={mailbox} />
+				<ShortcutsHelp open={helpOpen} onOpenChange={setHelpOpen} />
+				<SettingsDialog
+					mailboxId={mailbox.id}
+					address={mailbox.address}
+					labels={labels}
+					open={settings.open}
+					tab={settings.tab}
+					filterQuery={settings.filterQuery}
+					onOpenChange={(open) => setSettings((s) => ({ ...s, open }))}
+				/>
 			</div>
 		</TooltipProvider>
 	);

@@ -2,7 +2,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { Archive, ChevronDown, Inbox, Mail, MailOpen, Paperclip, RefreshCw, Star, Trash2 } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "react-router";
+import { Link, useNavigate } from "react-router";
 import { toast } from "sonner";
 import type { Label, ThreadDetail, ThreadSummary } from "../../../shared/api";
 import { Badge } from "~/components/ui/badge";
@@ -18,7 +18,10 @@ import type { Composer } from "~/lib/compose-store";
 import { visibleLabelChips } from "~/lib/folders";
 import { formatListDate, participantsLabel } from "~/lib/format";
 import { cn } from "~/lib/utils";
+import { listCursor, useShortcuts, useShortcutsEnabled } from "~/lib/shortcuts";
+import { formatSnoozeTime } from "~/lib/snooze";
 import { ActionBar } from "./ActionBar";
+import { SnoozeMenu } from "./SnoozeMenu";
 
 interface ThreadListProps {
 	mailboxId: string;
@@ -85,6 +88,92 @@ export function ThreadList({ mailboxId, mailboxAddress, folderSegment, labelId, 
 		if (lastIndex >= threads.length - 10 && query.hasNextPage && !query.isFetchingNextPage) query.fetchNextPage();
 	}, [lastIndex, threads.length, query]);
 
+	// Keyboard cursor (j/k), Gmail's blue bar. Starts on the conversation last opened.
+	const navigate = useNavigate();
+	const shortcutsOn = useShortcutsEnabled();
+	const [cursor, setCursor] = useState(0);
+	const [cursorShown, setCursorShown] = useState(false);
+	const [snoozeRow, setSnoozeRow] = useState<string | null>(null);
+	const [barSnoozeOpen, setBarSnoozeOpen] = useState(false);
+	const restored = useRef(false);
+	useEffect(() => {
+		if (restored.current || !threads.length) return;
+		restored.current = true;
+		const i = threads.findIndex((t) => t.id === listCursor.lastThreadId);
+		if (i >= 0) {
+			setCursor(i);
+			setCursorShown(true);
+			virtualizer.scrollToIndex(i, { align: "auto" });
+		}
+	}, [threads, virtualizer]);
+	const at = Math.min(cursor, threads.length - 1);
+	const cursorThread = at >= 0 ? threads[at] : undefined;
+	const hrefFor = (t: ThreadSummary) => `/mail/${mailboxId}/${folderSegment}/${t.id}${hrefSuffix}`;
+	const isDraftOnly = (t: ThreadSummary) => t.messageCount === 1 && t.labelIds.includes("DRAFT");
+
+	const move = (step: number) => {
+		if (!threads.length) return;
+		const next = cursorShown ? Math.max(0, Math.min(threads.length - 1, at + step)) : at;
+		setCursor(next);
+		setCursorShown(true);
+		virtualizer.scrollToIndex(next, { align: "auto" });
+	};
+	const open = () => {
+		if (!cursorShown) return setCursorShown(true);
+		if (!cursorThread) return;
+		if (isDraftOnly(cursorThread)) return void openDraft(cursorThread);
+		listCursor.lastThreadId = cursorThread.id;
+		navigate(hrefFor(cursorThread));
+	};
+	/** Selected conversations, or the one under the cursor. */
+	const keyTargets = () => {
+		const chosen = threads.filter((t) => selected.has(t.id));
+		// The cursor only counts once it's visible, so a stray key can't act on an unseen row.
+		return chosen.length ? chosen : cursorShown && cursorThread ? [cursorThread] : [];
+	};
+	const act = (delta: Parameters<MailActions["modify"]>[1], verb: string) => {
+		const targets = keyTargets();
+		if (!targets.length) return;
+		const n = targets.length;
+		void actions.modify(
+			targets.map((t) => t.id),
+			delta,
+			verb ? { message: n === 1 ? `Conversation ${verb}.` : `${n} conversations ${verb}.` } : {},
+		);
+	};
+	const inTrashOrSpam = labelId === "TRASH" || labelId === "SPAM";
+	useShortcuts(
+		{
+			j: () => move(1),
+			k: () => move(-1),
+			o: open,
+			Enter: open,
+			x: () => {
+				if (!cursorThread) return;
+				setCursorShown(true);
+				toggle(cursorThread.id, !selected.has(cursorThread.id));
+			},
+			s: () => {
+				const targets = keyTargets();
+				if (targets.length) act(targets.every((t) => t.labelIds.includes("STARRED")) ? Actions.unstar : Actions.star, "");
+			},
+			e: () => !inTrashOrSpam && act(Actions.archive, "archived"),
+			"#": () => labelId !== "TRASH" && act(Actions.trash, "moved to Trash"),
+			"!": () => labelId !== "SPAM" && act(Actions.spam, "marked as spam"),
+			I: () => act(Actions.markRead, ""),
+			U: () => act(Actions.markUnread, ""),
+			b: () => {
+				if (inTrashOrSpam) return;
+				if (selected.size) setBarSnoozeOpen(true);
+				else if (cursorThread && cursorShown) {
+					setCursorShown(true);
+					setSnoozeRow(cursorThread.id);
+				}
+			},
+		},
+		1,
+	);
+
 	const selectedThreads = threads.filter((t) => selected.has(t.id));
 	const allSelected = threads.length > 0 && selectedThreads.length === threads.length;
 
@@ -141,6 +230,8 @@ export function ThreadList({ mailboxId, mailboxAddress, folderSegment, labelId, 
 						labels={labels}
 						actions={actions}
 						onDone={(effect) => effect === "removed" && setSelected(new Set())}
+						snoozeOpen={barSnoozeOpen}
+						onSnoozeOpenChange={setBarSnoozeOpen}
 					/>
 				) : (
 					<Tooltip>
@@ -192,14 +283,21 @@ export function ThreadList({ mailboxId, mailboxAddress, folderSegment, labelId, 
 								>
 									<ThreadRow
 										thread={thread}
-										href={`/mail/${mailboxId}/${folderSegment}/${thread.id}${hrefSuffix}`}
+										href={hrefFor(thread)}
+										cursor={shortcutsOn && cursorShown && item.index === at}
+										snoozeOpen={snoozeRow === thread.id}
+										onSnoozeOpenChange={(o) => setSnoozeRow(o ? thread.id : null)}
+										onOpen={() => {
+											listCursor.lastThreadId = thread.id;
+											setCursor(item.index);
+										}}
 										me={mailboxAddress}
 										chips={visibleLabelChips(thread.labelIds, labels, labelId)}
 										selected={selected.has(thread.id)}
 										onSelect={(on) => toggle(thread.id, on)}
 										labelId={labelId}
 										actions={actions}
-										onOpenDraft={thread.messageCount === 1 && thread.labelIds.includes("DRAFT") ? () => void openDraft(thread) : undefined}
+										onOpenDraft={isDraftOnly(thread) ? () => void openDraft(thread) : undefined}
 									/>
 								</div>
 							);
@@ -223,6 +321,11 @@ interface RowProps {
 	actions: MailActions;
 	/** Set for draft-only conversations: clicking opens the composer instead of the thread. */
 	onOpenDraft?: () => void;
+	/** The keyboard cursor is on this row. */
+	cursor: boolean;
+	snoozeOpen: boolean;
+	onSnoozeOpenChange: (open: boolean) => void;
+	onOpen: () => void;
 }
 
 function RowIconButton({ label, onClick, children }: { label: string; onClick: () => void; children: React.ReactNode }) {
@@ -247,7 +350,7 @@ function RowIconButton({ label, onClick, children }: { label: string; onClick: (
 	);
 }
 
-function ThreadRow({ thread, href, me, chips, selected, onSelect, labelId, actions, onOpenDraft }: RowProps) {
+function ThreadRow({ thread, href, me, chips, selected, onSelect, labelId, actions, onOpenDraft, cursor, snoozeOpen, onSnoozeOpenChange, onOpen }: RowProps) {
 	const starred = thread.labelIds.includes("STARRED");
 	const hasDraft = thread.labelIds.includes("DRAFT");
 	const sending = thread.labelIds.includes("OUTBOX");
@@ -261,7 +364,8 @@ function ThreadRow({ thread, href, me, chips, selected, onSelect, labelId, actio
 			{sending && <span className="ml-1 font-normal text-muted-foreground">Sending…</span>}
 		</>
 	);
-	const date = formatListDate(thread.lastMessageAt);
+	const snoozed = thread.snoozedUntil !== null;
+	const date = snoozed ? formatSnoozeTime(thread.snoozedUntil!) : formatListDate(thread.lastMessageAt);
 	const subject = thread.subject || "(no subject)";
 	const inTrashOrSpam = labelId === "TRASH" || labelId === "SPAM";
 	const ids = [thread.id];
@@ -290,6 +394,7 @@ function ThreadRow({ thread, href, me, chips, selected, onSelect, labelId, actio
 				thread.unread ? "font-semibold" : "text-foreground/80",
 			)}
 		>
+			{cursor && <span aria-hidden className="absolute inset-y-0 left-0 w-[3px] bg-primary" />}
 			<div className="flex shrink-0 items-center gap-1 pl-2">
 				<Checkbox
 					checked={selected}
@@ -303,6 +408,7 @@ function ThreadRow({ thread, href, me, chips, selected, onSelect, labelId, actio
 			<Link
 				to={href}
 				onClick={(e) => {
+					onOpen();
 					if (!onOpenDraft || e.metaKey || e.ctrlKey || e.shiftKey) return;
 					e.preventDefault();
 					onOpenDraft();
@@ -329,7 +435,15 @@ function ThreadRow({ thread, href, me, chips, selected, onSelect, labelId, actio
 					</span>
 				</span>
 				{thread.hasAttachments && <Paperclip className="hidden size-4 shrink-0 text-muted-foreground md:block" aria-label="Has attachments" />}
-				<span className={cn("hidden w-16 shrink-0 text-right text-xs tabular-nums md:block md:group-hover:invisible", !thread.unread && "font-normal")}>
+				<span
+					className={cn(
+						"hidden min-w-16 shrink-0 text-right text-xs whitespace-nowrap tabular-nums md:block md:group-hover:invisible",
+						!thread.unread && "font-normal",
+						snoozed && "text-amber-700 dark:text-amber-400",
+						snoozeOpen && "invisible",
+					)}
+					title={snoozed ? "Snoozed until" : undefined}
+				>
 					{date}
 				</span>
 
@@ -337,7 +451,7 @@ function ThreadRow({ thread, href, me, chips, selected, onSelect, labelId, actio
 				<span className="flex min-w-0 flex-1 flex-col gap-0.5 md:hidden">
 					<span className="flex items-baseline gap-2">
 						<span className="flex-1 truncate">{senderCell}</span>
-						<span className={cn("shrink-0 text-xs", !thread.unread && "font-normal")}>{date}</span>
+						<span className={cn("shrink-0 text-xs", !thread.unread && "font-normal", snoozed && "text-amber-700 dark:text-amber-400")}>{date}</span>
 					</span>
 					<span className="truncate">{subject}</span>
 					<span className="flex items-center gap-2 font-normal text-muted-foreground">
@@ -349,7 +463,7 @@ function ThreadRow({ thread, href, me, chips, selected, onSelect, labelId, actio
 			<span className="pr-2 md:hidden">{star}</span>
 
 			{/* Gmail's hover actions replace the date. */}
-			<div className="absolute top-0 right-2 hidden h-full items-center bg-inherit md:group-hover:flex">
+			<div className={cn("absolute top-0 right-2 hidden h-full items-center bg-inherit md:group-hover:flex", snoozeOpen && "md:flex")}>
 				{!inTrashOrSpam &&
 					(thread.labelIds.includes("INBOX") ? (
 						<RowIconButton label="Archive" onClick={() => actions.modify(ids, Actions.archive, { message: "Conversation archived." })}>
@@ -364,6 +478,14 @@ function ThreadRow({ thread, href, me, chips, selected, onSelect, labelId, actio
 					<RowIconButton label="Delete" onClick={() => actions.modify(ids, Actions.trash, { message: "Conversation moved to Trash." })}>
 						<Trash2 className="size-4" />
 					</RowIconButton>
+				)}
+				{!inTrashOrSpam && (
+					<SnoozeMenu
+						compact
+						open={snoozeOpen}
+						onOpenChange={onSnoozeOpenChange}
+						onSnooze={(until, label) => void actions.snooze(ids, until, label)}
+					/>
 				)}
 				{thread.unread ? (
 					<RowIconButton label="Mark as read" onClick={() => actions.modify(ids, Actions.markRead)}>

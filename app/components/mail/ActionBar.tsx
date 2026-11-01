@@ -28,6 +28,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "~/components/ui/tooltip";
 import { Actions, type LabelDelta, type MailActions } from "~/lib/actions";
 import { ConfirmDialog, LabelDialog } from "./LabelDialog";
+import { SnoozeMenu } from "./SnoozeMenu";
 
 export interface ActionTarget {
 	id: string;
@@ -43,6 +44,9 @@ interface ActionBarProps {
 	actions: MailActions;
 	/** "removed" when the targets leave the current view (archive, delete, move…). */
 	onDone?: (effect: Effect) => void;
+	/** Controls the snooze menu, so the "b" shortcut can open it. */
+	snoozeOpen?: boolean;
+	onSnoozeOpenChange?: (open: boolean) => void;
 }
 
 function IconAction({ label, onClick, children }: { label: string; onClick: () => void; children: React.ReactNode }) {
@@ -63,7 +67,7 @@ type Effect = "removed" | "changed" | "markedUnread";
 const plural = (n: number, one: string) => (n === 1 ? `Conversation ${one}.` : `${n} conversations ${one}.`);
 
 /** Archive / spam / delete / read / move / label buttons for the selected threads or the open thread. */
-export function ActionBar({ targets, currentLabelId, labels, actions, onDone }: ActionBarProps) {
+export function ActionBar({ targets, currentLabelId, labels, actions, onDone, snoozeOpen, onSnoozeOpenChange }: ActionBarProps) {
 	const [creatingLabel, setCreatingLabel] = useState(false);
 	const [confirmDelete, setConfirmDelete] = useState(false);
 	const ids = targets.map((t) => t.id);
@@ -75,6 +79,7 @@ export function ActionBar({ targets, currentLabelId, labels, actions, onDone }: 
 	const anyUnread = targets.some((t) => t.unread);
 	const allStarred = targets.every((t) => t.labelIds.includes("STARRED"));
 	const allImportant = targets.every((t) => t.labelIds.includes("IMPORTANT"));
+	const anySnoozed = targets.some((t) => t.labelIds.includes("SNOOZED"));
 
 	const run = async (delta: LabelDelta, message: string, effect: Effect) => {
 		if (await actions.modify(ids, delta, { message })) onDone?.(effect);
@@ -151,6 +156,26 @@ export function ActionBar({ targets, currentLabelId, labels, actions, onDone }: 
 				<IconAction label="Mark as unread" onClick={() => run(Actions.markUnread, "", "markedUnread")}>
 					<Mail className="size-4" />
 				</IconAction>
+			)}
+			{!inTrash && !inSpam && (
+				<SnoozeMenu
+					open={snoozeOpen}
+					onOpenChange={onSnoozeOpenChange}
+					onSnooze={async (until, label) => {
+						if (await actions.snooze(ids, until, label)) onDone?.(currentLabelId === "ALL" ? "changed" : "removed");
+					}}
+				/>
+			)}
+			{anySnoozed && (
+				<Button
+					variant="ghost"
+					size="sm"
+					onClick={async () => {
+						if (await actions.unsnooze(ids)) onDone?.(currentLabelId === "SNOOZED" ? "removed" : "changed");
+					}}
+				>
+					Unsnooze
+				</Button>
 			)}
 
 			<DropdownMenu>

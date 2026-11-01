@@ -1,7 +1,9 @@
 import { type Context, Hono } from "hono";
 import { z } from "zod";
 import {
+	type Contact,
 	type DraftDetail,
+	type MailFilter,
 	type Label,
 	type MailboxRole,
 	type MailboxSettings,
@@ -95,14 +97,49 @@ const DraftFieldsBody = z.object({
 const CreateDraftBody = DraftFieldsBody.extend({
 	parent: z.object({ messageId: Id, kind: z.enum(["reply", "forward"]) }).optional(),
 });
+const Timestamp = z.number().int().min(0).max(8.64e15);
+const VacationBody = z
+	.object({
+		enabled: z.boolean(),
+		subject: z.string().max(SEND_LIMITS.subjectChars),
+		message: z.string().max(20_000),
+		startAt: Timestamp.nullable(),
+		endAt: Timestamp.nullable(),
+		contactsOnly: z.boolean(),
+	})
+	.refine((v) => !v.enabled || v.message.trim().length > 0, "Write a message for the vacation reply")
+	.refine((v) => v.startAt === null || v.endAt === null || v.startAt <= v.endAt, "The last day is before the first day");
 const SettingsBody = z.object({
 	signature: z.string().max(10_000).optional(),
+	vacation: VacationBody.optional(),
 	undoSendSeconds: z
 		.number()
 		.int()
 		.refine((n) => (UNDO_SEND_CHOICES as readonly number[]).includes(n), "Unsupported undo-send delay")
 		.optional(),
 });
+const SnoozeBody = z.object({
+	threadIds: z.array(Id).min(1).max(500),
+	until: Timestamp,
+});
+const ThreadIdsBody = z.object({ threadIds: z.array(Id).min(1).max(500) });
+const FilterBody = z.object({
+	query: z.string().trim().min(1, "A filter needs search criteria").max(MAX_QUERY_LENGTH),
+	actions: z.object({
+		archive: z.boolean().default(false),
+		markRead: z.boolean().default(false),
+		star: z.boolean().default(false),
+		important: z.boolean().default(false),
+		trash: z.boolean().default(false),
+		labelId: Id.nullable().default(null),
+	}),
+	applyToExisting: z.boolean().default(false),
+});
+const ContactsQuery = z.object({
+	q: z.string().max(200).default(""),
+	limit: z.coerce.number().int().min(1).max(20).default(8),
+});
+
 /** Uploads are read into memory; Email Service caps the whole message at 25 MiB anyway. */
 const MAX_UPLOAD_BYTES = SEND_LIMITS.messageBytes;
 
@@ -297,6 +334,34 @@ mailbox.get("/messages/:messageId/raw", async (c) => {
 	return new Response(object.body, {
 		headers: { "Content-Type": "text/plain; charset=utf-8", ...UNTRUSTED_CONTENT_HEADERS },
 	});
+});
+
+// ---- Organising: snooze, contacts, filters ----------------------------------
+
+mailbox.post("/threads/snooze", async (c) => {
+	const { threadIds, until } = await parseBody(c.req.raw, SnoozeBody);
+	return c.json(unwrap(await mailboxStub(c).snoozeThreads(threadIds, until)));
+});
+mailbox.post("/threads/unsnooze", async (c) => {
+	const { threadIds } = await parseBody(c.req.raw, ThreadIdsBody);
+	return c.json(unwrap(await mailboxStub(c).unsnoozeThreads(threadIds)));
+});
+
+mailbox.get("/contacts", async (c) => {
+	const q = ContactsQuery.safeParse(c.req.query());
+	if (!q.success) throw new HttpError(400, q.error.issues.map((i) => i.message).join("; "));
+	const entry = await getRegistry(c.env).getMailbox(c.req.param("mailboxId")!);
+	return c.json<Contact[]>(await mailboxStub(c).listContacts(q.data.q, q.data.limit, entry ? [entry.address] : []));
+});
+
+mailbox.get("/filters", async (c) => c.json<MailFilter[]>(await mailboxStub(c).listFilters()));
+mailbox.post("/filters", async (c) => {
+	const { query, actions, applyToExisting } = await parseBody(c.req.raw, FilterBody);
+	return c.json(unwrap(await mailboxStub(c).createFilter(query, actions, applyToExisting)), 201);
+});
+mailbox.delete("/filters/:filterId", async (c) => {
+	unwrap(await mailboxStub(c).deleteFilter(c.req.param("filterId")));
+	return c.body(null, 204);
 });
 
 // ---- Writing: drafts, attachments, sending ---------------------------------

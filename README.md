@@ -7,7 +7,7 @@ Self-hosted, Gmail-style webmail that runs entirely on your own Cloudflare accou
 - **Many users, many domains.** Admins add domains and mailboxes and grant people access. Each user switches between the mailboxes they're allowed to open.
 - **Sign-in** uses [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/). The Worker verifies every request's Access token itself and enforces per-mailbox permissions.
 
-> Status: **Phase 5 (search)**. Mail is received, threaded and readable; you can archive, delete, report spam, mark read or unread, star and label it, with undo. You can write new messages, reply, reply all and forward in Gmail-style compose windows, with rich text, attachments, auto-saved drafts, a signature and undo send. Search covers every message with Gmail's operators. Admins manage domains, mailboxes and members at `/admin`. Next: shortcuts, snooze, contacts, filters and vacation replies (Phase 6).
+> Status: **Phase 6 (organising)**. Mail is received, threaded and readable; you can archive, delete, report spam, mark read or unread, star and label it, with undo. You can write new messages, reply, reply all and forward in Gmail-style compose windows, with rich text, attachments, auto-saved drafts, a signature and undo send. Search covers every message with Gmail's operators. You can snooze conversations, set up filters and a vacation responder, get recipient suggestions from your contacts, and use Gmail's keyboard shortcuts. Trash and Spam empty themselves after 30 days. Admins manage domains, mailboxes and members at `/admin`. Next: hardening, end-to-end tests and a deploy button (Phase 8; AI features, Phase 7, are on hold).
 
 ## Stack
 
@@ -22,13 +22,15 @@ app/                 React UI
     compose/         Compose windows, TipTap editor, recipient chips
   lib/email-html.ts  Sanitises HTML mail for a sandboxed iframe (DOMPurify + CSP)
   lib/compose*.ts    Reply recipients, quoting, signature; compose window store
+  lib/shortcuts.ts   Keyboard shortcuts
 shared/              Types and helpers used by both browser and Worker
 workers/
   app.ts             Worker entry: /api → Hono, everything else → React Router
   api/               HTTP API
   auth/access.ts     Cloudflare Access JWT verification (+ local dev mode)
   registry/          RegistryDO: domains, mailboxes, members (one global instance)
-  mailbox/           MailboxDO: one per mailbox; threads, messages, labels, drafts, outbox, search
+  mailbox/           MailboxDO: one per mailbox; threads, messages, labels, drafts, outbox,
+                     search, snooze, contacts, filters, vacation replies, Trash purge
   email/inbound.ts   Email Routing handler
   email/outbound.ts  Builds Email Service payloads; explains send errors
 test/                Vitest tests that run in workerd
@@ -82,7 +84,12 @@ Checks: `pnpm test`, `pnpm run typecheck`, `pnpm run build`.
 | POST | `/api/mailboxes/:id/messages/modify` `{changes: [{messageId, addLabelIds, removeLabelIds}]}` | mailbox member (per-message changes and undo) |
 | POST | `/api/mailboxes/:id/threads/delete` `{threadIds}` | mailbox member (Trash/Spam only, permanent) |
 | POST/PATCH/DELETE | `/api/mailboxes/:id/labels[/:labelId]` | mailbox member (user labels) |
-| GET/PATCH | `/api/mailboxes/:id/settings` `{signature, undoSendSeconds}` | mailbox member |
+| GET/PATCH | `/api/mailboxes/:id/settings` `{signature, undoSendSeconds, vacation}` | mailbox member |
+| POST | `/api/mailboxes/:id/threads/snooze` `{threadIds, until}` | mailbox member (`until` in ms, in the future) |
+| POST | `/api/mailboxes/:id/threads/unsnooze` `{threadIds}` | mailbox member |
+| GET | `/api/mailboxes/:id/contacts?q=pri&limit=8` | mailbox member (recipient suggestions) |
+| GET/POST | `/api/mailboxes/:id/filters` `{query, actions, applyToExisting?}` | mailbox member |
+| DELETE | `/api/mailboxes/:id/filters/:filterId` | mailbox member |
 | POST | `/api/mailboxes/:id/drafts` `{to, cc, bcc, subject, html, parent?: {messageId, kind: "reply"\|"forward"}}` | mailbox member |
 | GET/PUT/DELETE | `/api/mailboxes/:id/drafts/:draftId` | mailbox member (open, save, discard) |
 | POST/DELETE | `/api/mailboxes/:id/drafts/:draftId/attachments[/:attachmentId]` | mailbox member (upload: raw body, `?filename=`) |
@@ -122,11 +129,38 @@ Each mailbox keeps an SQLite FTS5 index (subject, sender, recipients, body text,
 
 The search box has an options panel that builds these for you.
 
+## Organising
+
+- **Snooze** hides a conversation from the Inbox until a time you pick (presets or any date and time) and shows it under **Snoozed**. When the time comes, the mailbox's Durable Object alarm puts it back at the top of the Inbox, unread. A new message in the conversation, or moving it to the Inbox, Trash or Spam, ends the snooze early.
+- **Filters** are searches (same syntax as the search box) run on each message as it arrives: skip the Inbox, mark as read, star, mark as important, apply a label or delete. **Create filter** in the search options panel starts one from your search, and a new filter can also be applied to the conversations already there.
+- **Vacation responder** (Settings → Vacation) replies to incoming mail between optional first and last days, at most once per sender every 4 days, optionally only to people you've written to. It never answers mailing lists, bulk mail, bounces, no-reply senders or other auto-replies, and its replies carry `Auto-Submitted: auto-replied`. A banner shows while it's on, with **End now**.
+- **Contacts** come from the people you send to and the people who write to you; the To/Cc/Bcc boxes suggest them, people you've written to first.
+- **Trash and Spam** are emptied automatically: a message is deleted for good, with its files in R2, 30 days after it was moved there.
+
+### Keyboard shortcuts
+
+On by default (turn them off in the `?` dialog; the choice is saved in the browser). They're ignored while you're typing or a menu or dialog is open.
+
+| Keys | Action |
+|---|---|
+| `c` | Compose |
+| `/` | Search |
+| `?` | Show shortcuts |
+| `g` then `i` `s` `t` `d` `a` | Go to Inbox, Starred, Sent, Drafts, All Mail |
+| `j` / `k` | Older / newer conversation (moves the cursor in a list, opens the next one in a conversation) |
+| `o` or `Enter`, `u` | Open conversation, back to the list |
+| `x` | Select conversation |
+| `s`, `e`, `#`, `!`, `b` | Star, archive, delete, report spam, snooze |
+| `Shift`+`i`, `Shift`+`u` | Mark as read, mark as unread |
+| `r`, `a`, `f` | Reply, reply all, forward |
+
+In a list, actions apply to the selected conversations, or to the one under the cursor.
+
 ## How receiving works
 
 1. Email Routing calls the Worker's `email()` handler. Unknown recipients and messages over 25 MiB are rejected.
 2. The Worker parses the message with `postal-mime` and puts the raw `.eml`, the attachments and any HTML body over 256 KB into R2 under `mailboxes/<id>/messages/<messageId>/`.
-3. The mailbox Durable Object stores the message in one transaction. It skips duplicates (same Message-ID, since Email Routing may redeliver), finds the thread (by `In-Reply-To`/`References`, then by a reply arriving before its parent, then by a `Re:` subject within 30 days), labels it `INBOX` + `UNREAD`, and notifies connected browsers.
+3. The mailbox Durable Object stores the message in one transaction. It skips duplicates (same Message-ID, since Email Routing may redeliver), finds the thread (by `In-Reply-To`/`References`, then by a reply arriving before its parent, then by a `Re:` subject within 30 days), labels it `INBOX` + `UNREAD`, runs your filters, and notifies connected browsers. The vacation responder answers afterwards, if it's on.
 4. If storing fails, the R2 uploads are removed and the error is rethrown, so the delivery fails instead of the message being silently dropped.
 
 To try it locally while `pnpm dev` runs, post a raw message to the local email endpoint:

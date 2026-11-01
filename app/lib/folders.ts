@@ -1,4 +1,4 @@
-import { AlertOctagon, File, Inbox, type LucideIcon, Mails, Send, Star, Tag, Tags, Trash2 } from "lucide-react";
+import { AlertOctagon, Clock, File, Inbox, type LucideIcon, Mails, Send, Star, Tag, Tags, Trash2 } from "lucide-react";
 import type { Label } from "../../shared/api";
 
 /** Sidebar entries for system labels, in Gmail's order. The slug is the URL segment. */
@@ -14,6 +14,7 @@ export interface Folder {
 export const SYSTEM_FOLDERS: readonly Folder[] = [
 	{ slug: "inbox", labelId: "INBOX", name: "Inbox", icon: Inbox, count: "unread" },
 	{ slug: "starred", labelId: "STARRED", name: "Starred", icon: Star, count: "none" },
+	{ slug: "snoozed", labelId: "SNOOZED", name: "Snoozed", icon: Clock, count: "none" },
 	{ slug: "important", labelId: "IMPORTANT", name: "Important", icon: Tags, count: "none" },
 	{ slug: "sent", labelId: "SENT", name: "Sent", icon: Send, count: "none" },
 	{ slug: "drafts", labelId: "DRAFT", name: "Drafts", icon: File, count: "total" },
