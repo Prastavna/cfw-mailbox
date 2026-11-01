@@ -1,5 +1,5 @@
 import type { Editor } from "@tiptap/react";
-import { AlertCircle, Ellipsis, Loader2, Maximize2, Minimize2, Minus, Paperclip, Trash2, Type, X } from "lucide-react";
+import { AlertCircle, Ellipsis, Loader2, Maximize2, Minimize2, Minus, Paperclip, Sparkles, Trash2, Type, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { toast } from "sonner";
@@ -14,7 +14,9 @@ import { attachmentUrl } from "~/lib/api";
 import { invalidAddresses, splitDraftHtml } from "~/lib/compose";
 import { type ComposeWindow, draftsApi, useComposer, useComposeStore } from "~/lib/compose-store";
 import { renderEmailHtml } from "~/lib/email-html";
+import { useAiReady } from "~/lib/extensions";
 import { formatSize } from "~/lib/format";
+import { ComposeAssist } from "~/components/extensions/ai/ComposeAssist";
 import { cn } from "~/lib/utils";
 import { FormattingToolbar, RichEditor } from "./RichEditor";
 import { RecipientInput, type RecipientInputHandle } from "./RecipientInput";
@@ -188,6 +190,8 @@ function ComposeForm({ win, mailbox, initial }: { win: ComposeWindow; mailbox: M
 	const [status, setStatus] = useState<"idle" | "saving" | "saved" | "error">(win.draftId ? "saved" : "idle");
 	const [sending, setSending] = useState(false);
 	const [editor, setEditor] = useState<Editor | null>(null);
+	const aiReady = useAiReady();
+	const [assistOpen, setAssistOpen] = useState(false);
 	// Saves can run after unmount (closing saves), so they read the editor through a ref.
 	const editorRef = useRef<Editor | null>(null);
 
@@ -516,6 +520,16 @@ function ComposeForm({ win, mailbox, initial }: { win: ComposeWindow; mailbox: M
 				)}
 			</div>
 
+			{aiReady && assistOpen && editor && (
+				<ComposeAssist
+					editor={editor}
+					mailboxId={mailbox.id}
+					parentMessageId={initial.parent?.messageId}
+					subject={subject}
+					to={[...to, ...cc].map((a) => a.address)}
+					onClose={() => setAssistOpen(false)}
+				/>
+			)}
 			{showToolbar && <FormattingToolbar editor={editor} />}
 			<footer className="flex shrink-0 items-center gap-1 px-3 pt-1 pb-3">
 				<Button className="h-9 rounded-full px-6 font-medium" onClick={() => void send()} disabled={sending}>
@@ -528,6 +542,11 @@ function ComposeForm({ win, mailbox, initial }: { win: ComposeWindow; mailbox: M
 				<ToolTipButton label="Attach files" onClick={() => fileRef.current?.click()}>
 					<Paperclip />
 				</ToolTipButton>
+				{aiReady && (
+					<ToolTipButton label="Help me write" pressed={assistOpen} onClick={() => setAssistOpen((v) => !v)}>
+						<Sparkles className="text-violet-600 dark:text-violet-400" />
+					</ToolTipButton>
+				)}
 				<input
 					ref={fileRef}
 					type="file"

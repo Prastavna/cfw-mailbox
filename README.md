@@ -7,7 +7,7 @@ Self-hosted, Gmail-style webmail that runs entirely on your own Cloudflare accou
 - **Many users, many domains.** Admins add domains and mailboxes and grant people access. Each user switches between the mailboxes they're allowed to open.
 - **Sign-in** uses [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/). The Worker verifies every request's Access token itself and enforces per-mailbox permissions.
 
-> Status: **Phase 8 (hardening)**. Mail is received, threaded and readable; you can archive, delete, report spam, mark read or unread, star and label it, with undo. You can write new messages, reply, reply all and forward in Gmail-style compose windows, with rich text, attachments, auto-saved drafts, a signature and undo send. Search covers every message with Gmail's operators. You can snooze conversations, set up filters and a vacation responder, get recipient suggestions from your contacts, and use Gmail's keyboard shortcuts. Trash and Spam empty themselves after 30 days. Each mailbox can be downloaded as an mbox file. Admins manage domains, mailboxes and members at `/admin`. AI features (Phase 7) are on hold.
+> Status: **Phase 7 (AI extension)**. Mail is received, threaded and readable; you can archive, delete, report spam, mark read or unread, star and label it, with undo. You can write new messages, reply, reply all and forward in Gmail-style compose windows, with rich text, attachments, auto-saved drafts, a signature and undo send. Search covers every message with Gmail's operators. You can snooze conversations, set up filters and a vacation responder, get recipient suggestions from your contacts, and use Gmail's keyboard shortcuts. Trash and Spam empty themselves after 30 days. Each mailbox can be downloaded as an mbox file. Admins manage domains, mailboxes and members at `/admin`. An optional **AI Assistant** extension, which each user turns on with their own provider key, summarises conversations, drafts replies, rewrites text and answers questions about the mailbox.
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/OWNER/cfw-mailbox)
 
@@ -21,6 +21,7 @@ React 19 + React Router (framework mode) · Tailwind v4 + shadcn/ui · TanStack 
 app/                 React UI
   routes/            / → last mailbox; /mail/:mailboxId/:folder[/:threadId]
   components/mail/   Header, account switcher, sidebar, thread list, conversation view
+  components/extensions/  Extensions launcher (the 9-dot menu) and each extension's UI
     compose/         Compose windows, TipTap editor, recipient chips
   lib/email-html.ts  Sanitises HTML mail for a sandboxed iframe (DOMPurify + CSP)
   lib/compose*.ts    Reply recipients, quoting, signature; compose window store
@@ -35,8 +36,10 @@ workers/
                      search, snooze, contacts, filters, vacation replies, Trash purge
   email/inbound.ts   Email Routing handler
   email/outbound.ts  Builds Email Service payloads; explains send errors
+  extensions/ai/     AI Assistant: settings and encrypted keys, providers, prompts, routes
   email/export.ts    mbox export (mbox.ts: mboxrd escaping; mime.ts: rebuilds sent mail)
   lib/security-headers.ts  Headers added to every response
+  lib/crypto.ts      Encrypts users' secrets (AI keys) with ENCRYPTION_KEY
 test/                Vitest tests that run in workerd (fixtures/: mail as real clients send it)
 e2e/                 Playwright tests against `pnpm dev`
 ```
@@ -68,20 +71,20 @@ pnpm exec playwright install chromium   # once
 pnpm test:e2e             # end-to-end, against its own `pnpm dev` on port 5180
 ```
 
-The end-to-end tests keep their data in `.wrangler/e2e-state` and create a fresh mailbox per test, so they never touch your dev mail. Set `PLAYWRIGHT_CHROMIUM_EXECUTABLE` to use a Chromium you already have.
+The end-to-end tests keep their data in `.wrangler/e2e-state` and create a fresh mailbox per test, so they never touch your dev mail. Set `PLAYWRIGHT_CHROMIUM_EXECUTABLE` to use a Chromium you already have. The AI Assistant tests talk to a scripted, OpenAI-compatible fake provider that the test run starts on port 5181 (`e2e/fake-llm.ts`), so they need no key.
 
 ## Deploying (self-hosting)
 
 ### With the button
 
-1. Click **Deploy to Cloudflare** above. It forks the repository into your GitHub or GitLab account, creates the R2 bucket and Durable Objects, and deploys the Worker. It asks for `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD` and `ADMIN_EMAILS`; you can leave the Access values empty for now and set them in step 2.
+1. Click **Deploy to Cloudflare** above. It forks the repository into your GitHub or GitLab account, creates the R2 bucket and Durable Objects, and deploys the Worker. It asks for `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD`, `ADMIN_EMAILS` and `ENCRYPTION_KEY`; you can leave the Access values empty for now and set them in step 2.
 2. Continue from step 2 below.
 
 ### By hand
 
 1. `npx wrangler r2 bucket create cfw-mailbox`, then `pnpm run deploy`.
 2. **Protect it with Access.** Enable [one-click Access](https://developers.cloudflare.com/changelog/post/2025-10-03-one-click-access-for-workers/) on the Worker, then set the secrets `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` (`npx wrangler secret put ACCESS_AUD`, or in the dashboard) from the values it shows. Until both are set, the API refuses every request.
-3. Set the secret `ADMIN_EMAILS` to the people who manage domains and mailboxes (comma-separated).
+3. Set the secret `ADMIN_EMAILS` to the people who manage domains and mailboxes (comma-separated), and `ENCRYPTION_KEY` to a long random string (`openssl rand -base64 32`). It encrypts the AI provider keys people save; without it the AI Assistant only offers Workers AI. Changing it later makes saved keys unreadable, and people are asked to enter them again.
 4. For each domain, enable **Email Routing** and add a catch-all rule that sends to this Worker. Mail to addresses that have no mailbox is rejected.
 5. Enable **Email Service** sending for each domain (`npx wrangler email sending enable example.com`). Until a domain is onboarded, sending from it fails with a message saying so, and the draft stays in Drafts.
 
@@ -94,6 +97,28 @@ The end-to-end tests keep their data in `.wrangler/e2e-state` and create a fresh
 - **Pages** are sent with a per-request nonce Content Security Policy (no inline scripts without the nonce, no framing, no plugins) and `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`, `Permissions-Policy` and, over HTTPS, HSTS. Static files get the same via `public/_headers`.
 - **Mail content** is sanitised and shown in a sandboxed iframe with its own stricter policy (see *Reading mail safely*). Attachments and "Show original" are served with `nosniff` and a sandboxing CSP, and only images display inline.
 
+## AI Assistant (extension)
+
+Extensions live in the 9-dot menu at the top right. Each user turns them on for themselves; until they do, nothing about them appears in the app and their API refuses requests. The first one is the **AI Assistant**:
+
+- **Summarise** a conversation (button next to its subject).
+- **Help me write** in the composer: describe the email or reply and get a draft; or select text and shorten it, make it more formal or friendly, fix its grammar, or describe your own change. The result is shown first and goes into the message only when you click Insert or Replace.
+- **Ask your inbox** (sparkle button in the top bar): a chat that searches and reads the open mailbox to answer questions, and links to the conversations it used. Its tools are read-only: it can't send, delete or change mail.
+
+Nothing runs automatically: every request starts with a click, and only the conversation or text it needs is sent to the provider.
+
+**Bring your own key.** In the AI Assistant's settings each user picks a provider and model:
+
+| Provider | Key |
+|---|---|
+| Anthropic, OpenAI, Google Gemini | The user's own API key |
+| OpenAI-compatible | A server URL (OpenRouter, Groq, Together, Mistral, DeepSeek, a local Ollama or LM Studio…) and its key, if it needs one |
+| Workers AI | None: runs on the Cloudflare account the mail server is deployed on, which pays for it |
+
+Keys are encrypted with AES-256-GCM under `ENCRYPTION_KEY` before they're stored, bound to their owner, and never sent back to the browser. The model list comes from the provider using the saved key. Providers are reached through the [AI SDK](https://ai-sdk.dev/); Workers AI through the `AI` binding.
+
+Mail is written by strangers and can contain text aimed at the model ("ignore your instructions…"). Prompts mark mail as untrusted content, and because the assistant can only read, the most such a message can do is mislead its answer, which is why AI output is labelled and links back to the source.
+
 ## Limits
 
 | What | Limit |
@@ -102,6 +127,7 @@ The end-to-end tests keep their data in `.wrangler/e2e-state` and create a fresh
 | Outgoing message | 50 recipients, 32 attachments, 25 MB (Email Service) |
 | API requests | 600 a minute per user |
 | Sends, uploads, exports | 30 a minute per user |
+| AI Assistant requests | 20 a minute per user |
 | JSON request body | 1 MiB (a draft's HTML is capped at 300 KB) |
 | Mailbox database | about 9 GiB of the Durable Object's 10 GB; past that, new mail is bounced with "Mailbox is full" |
 
@@ -146,6 +172,14 @@ Request budgets use the [Workers rate limiting binding](https://developers.cloud
 | POST/DELETE | `/api/mailboxes/:id/drafts/:draftId/attachments[/:attachmentId]` | mailbox member (upload: raw body, `?filename=`) |
 | POST | `/api/mailboxes/:id/drafts/:draftId/send` | mailbox member |
 | POST | `/api/mailboxes/:id/drafts/:draftId/cancel-send` | mailbox member (undo send) |
+| GET | `/api/extensions` | signed in (extensions and whether each is on) |
+| GET/PUT | `/api/extensions/ai` `{enabled, provider, model, baseUrl, apiKey}` | signed in (own settings; the key is write-only) |
+| GET | `/api/extensions/ai/models` | signed in (models from the provider) |
+| POST | `/api/extensions/ai/test` | signed in (a tiny request to check the key and model) |
+| POST | `/api/extensions/ai/rewrite` `{text, mode?, instructions?}` | signed in, AI on (streams plain text) |
+| POST | `/api/mailboxes/:id/ai/summarize` `{threadId}` | mailbox member, AI on (streams plain text) |
+| POST | `/api/mailboxes/:id/ai/write` `{instructions, parentMessageId?, subject?, to?, current?}` | mailbox member, AI on (streams plain text) |
+| POST | `/api/mailboxes/:id/ai/chat` `{messages, tz}` | mailbox member, AI on (AI SDK UI message stream) |
 
 `threads?label=` takes a label ID or `ALL` (All Mail). Threads in Trash or Spam are hidden from every other view and from the counts.
 

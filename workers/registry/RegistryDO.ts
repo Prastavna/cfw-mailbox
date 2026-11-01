@@ -5,7 +5,7 @@ import type { Domain, Mailbox, MailboxAccess, MailboxRole, Member } from "../../
 import { domainOf, normalizeAddress, normalizeDomain } from "../../shared/address";
 import { runMigrations } from "../lib/migrate";
 import { ok, type Result } from "../lib/result";
-import { domains, mailboxes, mailboxMembers, REGISTRY_MIGRATIONS } from "./schema";
+import { domains, mailboxes, mailboxMembers, REGISTRY_MIGRATIONS, userExtensions } from "./schema";
 
 /**
  * The single, global directory: which domains this install serves, which
@@ -148,6 +148,42 @@ export class RegistryDO extends DurableObject<Env> {
 			.get();
 		return row?.role ?? null;
 	}
+
+	// ---- Extensions ------------------------------------------------------
+
+	async listUserExtensions(rawEmail: string): Promise<Record<string, UserExtension>> {
+		const rows = this.db.select().from(userExtensions).where(eq(userExtensions.userEmail, normalizeAddress(rawEmail))).all();
+		return Object.fromEntries(rows.map((r) => [r.extensionId, { enabled: r.enabled, settings: r.settings, secret: r.secret }]));
+	}
+
+	async getUserExtension(rawEmail: string, extensionId: string): Promise<UserExtension | null> {
+		const row = this.db
+			.select()
+			.from(userExtensions)
+			.where(and(eq(userExtensions.userEmail, normalizeAddress(rawEmail)), eq(userExtensions.extensionId, extensionId)))
+			.get();
+		return row ? { enabled: row.enabled, settings: row.settings, secret: row.secret } : null;
+	}
+
+	async saveUserExtension(rawEmail: string, extensionId: string, value: UserExtension): Promise<void> {
+		const row = { userEmail: normalizeAddress(rawEmail), extensionId, ...value, updatedAt: Date.now() };
+		this.db
+			.insert(userExtensions)
+			.values(row)
+			.onConflictDoUpdate({
+				target: [userExtensions.userEmail, userExtensions.extensionId],
+				set: { enabled: row.enabled, settings: row.settings, secret: row.secret, updatedAt: row.updatedAt },
+			})
+			.run();
+	}
+}
+
+export interface UserExtension {
+	enabled: boolean;
+	/** JSON, owned by the extension. */
+	settings: string;
+	/** Ciphertext, opened in the Worker; the directory never sees plaintext. */
+	secret: string | null;
 }
 
 export type { Result };

@@ -4,7 +4,13 @@ import tailwindcss from "@tailwindcss/vite";
 import { defineConfig } from "vite";
 
 /** `pnpm dev` signs you in without Cloudflare Access. .dev.vars overrides these. */
-const DEV_VARS = { AUTH_MODE: "dev", DEV_USER_EMAIL: "dev@example.com", ADMIN_EMAILS: "dev@example.com" };
+const DEV_VARS = {
+	AUTH_MODE: "dev",
+	DEV_USER_EMAIL: "dev@example.com",
+	ADMIN_EMAILS: "dev@example.com",
+	// Only protects keys stored in local dev state. Production sets its own secret.
+	ENCRYPTION_KEY: "local-development-only-not-secret",
+};
 
 export default defineConfig(({ command }) => ({
 	plugins: [

@@ -1,6 +1,8 @@
 import { Pencil } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, Outlet, useLocation, useNavigate, useParams } from "react-router";
+import { AskInbox } from "~/components/extensions/ai/AskInbox";
+import { AiSettingsDialog } from "~/components/extensions/AiSettingsDialog";
 import { ComposeDock } from "~/components/mail/compose/ComposeWindow";
 import { Header } from "~/components/mail/Header";
 import { SettingsDialog, type SettingsTab } from "~/components/mail/SettingsDialog";
@@ -15,6 +17,7 @@ import type { MailboxAccess, Me } from "../../shared/api";
 import { useMailActions } from "~/lib/actions";
 import { rememberMailbox, useLabels, useMailboxEvents, useMe } from "~/lib/api";
 import { useComposer } from "~/lib/compose-store";
+import { useAiReady } from "~/lib/extensions";
 import type { MailboxContext } from "~/lib/mailbox-context";
 import { useShortcuts } from "~/lib/shortcuts";
 import { cn } from "~/lib/utils";
@@ -54,6 +57,9 @@ function MailboxFrame({ me, mailbox }: { me: Me; mailbox: MailboxAccess }) {
 	const [settings, setSettings] = useState<{ open: boolean; tab: SettingsTab; filterQuery?: string }>({ open: false, tab: "general" });
 	const openSettings = (tab: SettingsTab = "general", filterQuery?: string) => setSettings({ open: true, tab, filterQuery });
 	const [helpOpen, setHelpOpen] = useState(false);
+	const [aiSettingsOpen, setAiSettingsOpen] = useState(false);
+	const [askOpen, setAskOpen] = useState(false);
+	const aiReady = useAiReady();
 	const navigate = useNavigate();
 	const go = (slug: string) => () => navigate(`/mail/${mailbox.id}/${slug}`);
 	useShortcuts({
@@ -92,7 +98,16 @@ function MailboxFrame({ me, mailbox }: { me: Me; mailbox: MailboxAccess }) {
 	return (
 		<TooltipProvider delayDuration={400}>
 			<div className="flex h-svh flex-col bg-mail-canvas text-foreground">
-				<Header me={me} mailbox={mailbox} live={live} labels={labels} onToggleSidebar={toggleSidebar} onOpenSettings={openSettings} />
+				<Header
+					me={me}
+					mailbox={mailbox}
+					live={live}
+					labels={labels}
+					onToggleSidebar={toggleSidebar}
+					onOpenSettings={openSettings}
+					onOpenExtension={() => setAiSettingsOpen(true)}
+					onAsk={aiReady ? () => setAskOpen(true) : undefined}
+				/>
 				<VacationBanner mailboxId={mailbox.id} onOpenSettings={() => openSettings("vacation")} />
 				<div className="flex min-h-0 flex-1">
 					<aside className={cn("hidden shrink-0 overflow-y-auto md:block", collapsed ? "w-[72px]" : "w-64")}>
@@ -127,6 +142,8 @@ function MailboxFrame({ me, mailbox }: { me: Me; mailbox: MailboxAccess }) {
 				</Button>
 				<ComposeDock mailbox={mailbox} />
 				<ShortcutsHelp open={helpOpen} onOpenChange={setHelpOpen} />
+				<AiSettingsDialog open={aiSettingsOpen} onOpenChange={setAiSettingsOpen} />
+				{aiReady && <AskInbox mailboxId={mailbox.id} open={askOpen} onOpenChange={setAskOpen} />}
 				<SettingsDialog
 					mailboxId={mailbox.id}
 					address={mailbox.address}

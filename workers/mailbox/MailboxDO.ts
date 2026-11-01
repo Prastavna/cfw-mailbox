@@ -601,6 +601,11 @@ export class MailboxDO extends DurableObject<Env> {
 		return ok({ threads: page.map(toThreadSummary), nextCursor: rows.length > opts.limit && last ? encodeCursor(last) : null });
 	}
 
+	/** The conversation a message belongs to, or null if there's no such message. */
+	async threadIdOf(messageId: string): Promise<string | null> {
+		return this.sql.exec<{ thread_id: string }>("SELECT thread_id FROM messages WHERE id = ?", messageId).toArray()[0]?.thread_id ?? null;
+	}
+
 	async getThread(threadId: string): Promise<ThreadDetail | null> {
 		const thread = this.sql.exec<ThreadRow>(`SELECT ${THREAD_COLUMNS} FROM threads t WHERE t.id = ?`, threadId).toArray()[0];
 		if (!thread) return null;

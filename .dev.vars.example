@@ -11,3 +11,7 @@ ACCESS_TEAM_DOMAIN=
 ACCESS_AUD=
 # Comma-separated emails allowed to manage domains, mailboxes and members.
 ADMIN_EMAILS=
+# Encrypts the AI provider keys users save for the AI Assistant extension. Any long random
+# string, e.g. the output of `openssl rand -base64 32`. Changing it makes saved keys unreadable
+# (users are asked to enter them again).
+ENCRYPTION_KEY=

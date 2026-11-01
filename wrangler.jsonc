@@ -18,13 +18,16 @@
 	//   ACCESS_TEAM_DOMAIN  your Access team domain, e.g. https://myteam.cloudflareaccess.com
 	//   ACCESS_AUD          the Application Audience (AUD) tag of the Access application
 	//   ADMIN_EMAILS        comma-separated emails allowed to manage domains, mailboxes and members
+	//   ENCRYPTION_KEY      any long random string; encrypts users' AI provider keys
 
 	// Per-location request budgets (approximate; see README "Limits").
 	"ratelimits": [
 		// Every signed-in API request, per user.
 		{ "name": "API_LIMITER", "namespace_id": "41001", "simple": { "limit": 600, "period": 60 } },
 		// Sends, attachment uploads and exports, per user.
-		{ "name": "HEAVY_LIMITER", "namespace_id": "41002", "simple": { "limit": 30, "period": 60 } }
+		{ "name": "HEAVY_LIMITER", "namespace_id": "41002", "simple": { "limit": 30, "period": 60 } },
+		// AI Assistant requests (summaries, drafts, rewrites, chat), per user.
+		{ "name": "AI_LIMITER", "namespace_id": "41003", "simple": { "limit": 20, "period": 60 } }
 	],
 
 	"durable_objects": {
@@ -42,5 +45,9 @@
 
 	// Outbound mail via Cloudflare Email Service. Local dev simulates sends (no real mail);
 	// add "remote": true to send real mail from `pnpm dev`.
-	"send_email": [{ "name": "EMAIL" }]
+	"send_email": [{ "name": "EMAIL" }],
+
+	// Workers AI, one of the AI Assistant's providers. Billed to this Cloudflare account, unlike
+	// the other providers, where each user brings their own API key. Always remote, even in dev.
+	"ai": { "binding": "AI" }
 }

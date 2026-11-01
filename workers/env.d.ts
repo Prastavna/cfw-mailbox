@@ -6,6 +6,8 @@ interface CfwMailboxSecrets {
 	ACCESS_AUD: string;
 	ADMIN_EMAILS: string;
 	DEV_USER_EMAIL: string;
+	/** Encrypts users' AI provider keys at rest. Any long random string. */
+	ENCRYPTION_KEY: string;
 }
 interface Env extends CfwMailboxSecrets {}
 declare namespace Cloudflare {

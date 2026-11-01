@@ -17,18 +17,16 @@ import {
 	UNDO_SEND_CHOICES,
 } from "../../shared/api";
 import { domainOf, isValidAddress, isValidDomain } from "../../shared/address";
-import { authenticate, type Identity } from "../auth/access";
+import { authenticate } from "../auth/access";
 import { exportMbox } from "../email/export";
+import { extensionRoutes, mailboxAiRoutes } from "../extensions/ai/routes";
 import { HttpError } from "../lib/http";
+import { type AppEnv, parseBody, rateLimit } from "./common";
 import { MAX_QUERY_LENGTH } from "../../shared/search";
 import { messageKeys } from "../mailbox/keys";
 import { getMailbox } from "../mailbox/MailboxDO";
 import { getRegistry, type Result } from "../registry/RegistryDO";
 
-type AppEnv = {
-	Bindings: Env;
-	Variables: { identity: Identity; role: MailboxRole };
-};
 
 const domainSchema = z.string().refine(isValidDomain, "Invalid domain");
 const addressSchema = z.string().refine(isValidAddress, "Invalid email address");
@@ -159,39 +157,6 @@ function contentDisposition(type: "inline" | "attachment", filename: string): st
 	return `${type}; filename="${ascii}"; filename*=UTF-8''${encoded}`;
 }
 
-/** Largest JSON body accepted: a draft at its size limit, with room for the other fields. */
-const MAX_JSON_BYTES = 1024 * 1024;
-
-async function parseBody<T extends z.ZodType>(req: Request, schema: T): Promise<z.infer<T>> {
-	// Requiring JSON forces a CORS preflight for cross-site requests, which blocks form-based CSRF.
-	if (!req.headers.get("content-type")?.toLowerCase().startsWith("application/json")) {
-		throw new HttpError(415, "Content-Type must be application/json");
-	}
-	if (Number(req.headers.get("content-length") ?? 0) > MAX_JSON_BYTES) throw new HttpError(413, "Request body is too large");
-	// The header can be missing (chunked uploads), so check what actually arrived too.
-	const text = await req.text();
-	if (text.length > MAX_JSON_BYTES) throw new HttpError(413, "Request body is too large");
-	let json: unknown;
-	try {
-		json = JSON.parse(text);
-	} catch {
-		throw new HttpError(400, "Body must be JSON");
-	}
-	const parsed = schema.safeParse(json);
-	if (!parsed.success) throw new HttpError(400, parsed.error.issues.map((i) => i.message).join("; "));
-	return parsed.data;
-}
-
-/**
- * Per-user budgets from the Workers rate limiting binding. They're counted per Cloudflare
- * location and are approximate: a guard against runaway clients and scripts, not a quota.
- */
-async function rateLimit(limiter: RateLimit | undefined, key: string) {
-	if (!limiter) return;
-	const { success } = await limiter.limit({ key });
-	if (!success) throw new HttpError(429, "Too many requests. Wait a minute and try again.");
-}
-
 /** For sends, uploads and exports, on top of the general budget. */
 const heavy = (c: Context<AppEnv>) => rateLimit(c.env.HEAVY_LIMITER, c.get("identity").email);
 
@@ -282,6 +247,10 @@ admin.delete("/mailboxes/:id/members/:email", async (c) => {
 });
 
 api.route("/admin", admin);
+
+// ---- Extensions (each user's own; off until they turn them on) ------------------
+
+api.route("/extensions", extensionRoutes);
 
 // ---- Per-mailbox routes ---------------------------------------------------
 
@@ -487,5 +456,7 @@ mailbox.get("/events", async (c) => {
 	if (c.req.header("Upgrade")?.toLowerCase() !== "websocket") throw new HttpError(426, "Expected a WebSocket upgrade");
 	return mailboxStub(c).fetch(c.req.raw);
 });
+
+mailbox.route("/ai", mailboxAiRoutes);
 
 api.route("/mailboxes/:mailboxId", mailbox);

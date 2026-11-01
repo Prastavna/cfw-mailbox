@@ -34,6 +34,8 @@ import { cn } from "~/lib/utils";
 import { ActionBar } from "./ActionBar";
 import { AttachmentList } from "./AttachmentList";
 import { EmailBody } from "./EmailBody";
+import { SummarizeButton, SummaryCard, useThreadSummary } from "~/components/extensions/ai/ThreadSummary";
+import { useAiReady } from "~/lib/extensions";
 
 interface ThreadViewProps {
 	mailboxId: string;
@@ -68,6 +70,8 @@ export function ThreadView({ mailboxId, mailboxAddress, threadId, backHref, curr
 	const initialised = useRef<string | null>(null);
 	const queryClient = useQueryClient();
 	const [snoozeOpen, setSnoozeOpen] = useState(false);
+	const aiReady = useAiReady();
+	const summary = useThreadSummary(mailboxId, threadId);
 
 	useEffect(() => {
 		listCursor.lastThreadId = threadId;
@@ -168,7 +172,9 @@ export function ThreadView({ mailboxId, mailboxAddress, threadId, backHref, curr
 									{c.name}
 								</Badge>
 							))}
+							{aiReady && messages.length > 0 && <SummarizeButton state={summary.state} onClick={summary.summarize} />}
 						</header>
+						{aiReady && <SummaryCard state={summary.state} onRetry={summary.summarize} onClose={summary.reset} />}
 
 						{messages.map((m, i) => {
 							if (fold && i >= fold.from && i < fold.to) {

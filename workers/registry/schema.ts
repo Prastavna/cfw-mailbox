@@ -31,6 +31,21 @@ export const mailboxMembers = sqliteTable(
 	(t) => [primaryKey({ columns: [t.mailboxId, t.userEmail] }), index("idx_members_user").on(t.userEmail)],
 );
 
+/** Each user's settings for each extension. `secret` is ciphertext (see lib/crypto.ts). */
+export const userExtensions = sqliteTable(
+	"user_extensions",
+	{
+		userEmail: text("user_email").notNull(),
+		extensionId: text("extension_id").notNull(),
+		enabled: integer("enabled", { mode: "boolean" }).notNull(),
+		/** JSON. */
+		settings: text("settings").notNull(),
+		secret: text("secret"),
+		updatedAt: integer("updated_at").notNull(),
+	},
+	(t) => [primaryKey({ columns: [t.userEmail, t.extensionId] })],
+);
+
 export const REGISTRY_MIGRATIONS: readonly Migration[] = [
 	{
 		version: 1,
@@ -56,6 +71,21 @@ export const REGISTRY_MIGRATIONS: readonly Migration[] = [
 				PRIMARY KEY (mailbox_id, user_email)
 			);
 			CREATE INDEX idx_members_user ON mailbox_members(user_email);
+		`,
+	},
+	{
+		version: 2,
+		name: "user extensions",
+		sql: `
+			CREATE TABLE user_extensions (
+				user_email TEXT NOT NULL,
+				extension_id TEXT NOT NULL,
+				enabled INTEGER NOT NULL,
+				settings TEXT NOT NULL,
+				secret TEXT,
+				updated_at INTEGER NOT NULL,
+				PRIMARY KEY (user_email, extension_id)
+			) WITHOUT ROWID;
 		`,
 	},
 ];
