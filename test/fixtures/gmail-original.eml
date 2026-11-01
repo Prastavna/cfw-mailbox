@@ -1,0 +1,50 @@
+Received: by mail-yw1-f170.google.com with SMTP id 00721157ae682-6f2b1c2d3e4so1234567b3.2
+        for <{{TO}}>; Mon, 26 Oct 2026 09:14:22 -0700 (PDT)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=gmail.test; s=20230601; t=1793031262; x=1793636062; h=to:subject:message-id:date:from:mime-version:from:to:cc:subject:date:message-id:reply-to; bh=abc=; b=def=
+X-Gm-Message-State: AOJu0YzExampleExampleExample
+X-Google-Smtp-Source: AGHT+IExampleExample
+MIME-Version: 1.0
+From: =?UTF-8?Q?Ren=C3=A9e_Okafor?= <renee.okafor@gmail.test>
+Date: Mon, 26 Oct 2026 17:14:10 +0100
+Message-ID: <CAJ7d+XqA1b2C3d4E5f6G7h8I9j0K@mail.gmail.test>
+Subject: =?UTF-8?Q?Caf=C3=A9_offsite_=E2=80=94_venue_photos?=
+To: {{TO}}
+Content-Type: multipart/related; boundary="000000000000a1b2c3061f9d8e7f"
+
+--000000000000a1b2c3061f9d8e7f
+Content-Type: multipart/alternative; boundary="000000000000a1b2c2061f9d8e7e"
+
+--000000000000a1b2c2061f9d8e7e
+Content-Type: text/plain; charset="UTF-8"
+Content-Transfer-Encoding: quoted-printable
+
+Hi team,
+
+Here=E2=80=99s the caf=C3=A9 for the offsite =E2=80=94 photo below.
+[image: terrace.png]
+
+Budget is =E2=82=AC1,200 for 14 people.
+
+Ren=C3=A9e
+
+--000000000000a1b2c2061f9d8e7e
+Content-Type: text/html; charset="UTF-8"
+Content-Transfer-Encoding: quoted-printable
+
+<div dir=3D"ltr">Hi team,<div><br></div><div>Here=E2=80=99s the caf=C3=A9 =
+for the offsite =E2=80=94 photo below.</div><div><img src=3D"cid:ii_mh8x2k=
+4p0" alt=3D"terrace.png" width=3D"1" height=3D"1"><br></div><div><br></div=
+><div>Budget is <b>=E2=82=AC1,200</b> for 14 people.</div><div><br></div><=
+div>Ren=C3=A9e</div></div>
+
+--000000000000a1b2c2061f9d8e7e--
+
+--000000000000a1b2c3061f9d8e7f
+Content-Type: image/png; name="terrace.png"
+Content-Disposition: inline; filename="terrace.png"
+Content-Transfer-Encoding: base64
+Content-ID: <ii_mh8x2k4p0>
+X-Attachment-Id: ii_mh8x2k4p0
+
+iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=
+--000000000000a1b2c3061f9d8e7f--

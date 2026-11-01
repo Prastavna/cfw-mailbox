@@ -11,15 +11,21 @@
 	"upload_source_maps": true,
 
 	"vars": {
-		// "access" (production, default) or "dev" (local only; see .dev.vars.example).
-		"AUTH_MODE": "access",
-		// Your Access team domain, e.g. "https://myteam.cloudflareaccess.com".
-		"ACCESS_TEAM_DOMAIN": "",
-		// The Application Audience (AUD) tag of the Access application protecting this Worker.
-		"ACCESS_AUD": "",
-		// Comma-separated emails allowed to manage domains, mailboxes and members.
-		"ADMIN_EMAILS": ""
+		// "access" (production) or "dev" (local only). `pnpm dev` switches to "dev" automatically.
+		"AUTH_MODE": "access"
 	},
+	// Set as secrets (`wrangler secret put`, or the prompts of the Deploy button; see .dev.vars.example):
+	//   ACCESS_TEAM_DOMAIN  your Access team domain, e.g. https://myteam.cloudflareaccess.com
+	//   ACCESS_AUD          the Application Audience (AUD) tag of the Access application
+	//   ADMIN_EMAILS        comma-separated emails allowed to manage domains, mailboxes and members
+
+	// Per-location request budgets (approximate; see README "Limits").
+	"ratelimits": [
+		// Every signed-in API request, per user.
+		{ "name": "API_LIMITER", "namespace_id": "41001", "simple": { "limit": 600, "period": 60 } },
+		// Sends, attachment uploads and exports, per user.
+		{ "name": "HEAVY_LIMITER", "namespace_id": "41002", "simple": { "limit": 30, "period": 60 } }
+	],
 
 	"durable_objects": {
 		"bindings": [

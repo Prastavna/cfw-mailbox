@@ -7,6 +7,7 @@ import {
 	type Label,
 	type MailboxRole,
 	type MailboxSettings,
+	type MailboxUsage,
 	type Me,
 	type ModifyResult,
 	SEND_LIMITS,
@@ -17,6 +18,7 @@ import {
 } from "../../shared/api";
 import { domainOf, isValidAddress, isValidDomain } from "../../shared/address";
 import { authenticate, type Identity } from "../auth/access";
+import { exportMbox } from "../email/export";
 import { HttpError } from "../lib/http";
 import { MAX_QUERY_LENGTH } from "../../shared/search";
 import { messageKeys } from "../mailbox/keys";
@@ -157,18 +159,41 @@ function contentDisposition(type: "inline" | "attachment", filename: string): st
 	return `${type}; filename="${ascii}"; filename*=UTF-8''${encoded}`;
 }
 
+/** Largest JSON body accepted: a draft at its size limit, with room for the other fields. */
+const MAX_JSON_BYTES = 1024 * 1024;
+
 async function parseBody<T extends z.ZodType>(req: Request, schema: T): Promise<z.infer<T>> {
 	// Requiring JSON forces a CORS preflight for cross-site requests, which blocks form-based CSRF.
 	if (!req.headers.get("content-type")?.toLowerCase().startsWith("application/json")) {
 		throw new HttpError(415, "Content-Type must be application/json");
 	}
-	const json = await req.json().catch(() => {
+	if (Number(req.headers.get("content-length") ?? 0) > MAX_JSON_BYTES) throw new HttpError(413, "Request body is too large");
+	// The header can be missing (chunked uploads), so check what actually arrived too.
+	const text = await req.text();
+	if (text.length > MAX_JSON_BYTES) throw new HttpError(413, "Request body is too large");
+	let json: unknown;
+	try {
+		json = JSON.parse(text);
+	} catch {
 		throw new HttpError(400, "Body must be JSON");
-	});
+	}
 	const parsed = schema.safeParse(json);
 	if (!parsed.success) throw new HttpError(400, parsed.error.issues.map((i) => i.message).join("; "));
 	return parsed.data;
 }
+
+/**
+ * Per-user budgets from the Workers rate limiting binding. They're counted per Cloudflare
+ * location and are approximate: a guard against runaway clients and scripts, not a quota.
+ */
+async function rateLimit(limiter: RateLimit | undefined, key: string) {
+	if (!limiter) return;
+	const { success } = await limiter.limit({ key });
+	if (!success) throw new HttpError(429, "Too many requests. Wait a minute and try again.");
+}
+
+/** For sends, uploads and exports, on top of the general budget. */
+const heavy = (c: Context<AppEnv>) => rateLimit(c.env.HEAVY_LIMITER, c.get("identity").email);
 
 function unwrap<T>(result: Result<T>): T {
 	if (result.ok) return result.value;
@@ -179,7 +204,10 @@ function unwrap<T>(result: Result<T>): T {
 export const api = new Hono<AppEnv>().basePath("/api");
 
 api.onError((err, c) => {
-	if (err instanceof HttpError) return c.json({ error: err.message }, err.status);
+	if (err instanceof HttpError) {
+		if (err.status === 429) c.header("Retry-After", "60");
+		return c.json({ error: err.message }, err.status);
+	}
 	console.error(err);
 	return c.json({ error: "Internal error" }, 500);
 });
@@ -199,9 +227,11 @@ api.use("*", async (c, next) => {
 	await next();
 });
 
-// Everything below requires a signed-in user.
+// Everything below requires a signed-in user, and each user has a request budget.
 api.use("*", async (c, next) => {
-	c.set("identity", await authenticate(c.req.raw, c.env));
+	const identity = await authenticate(c.req.raw, c.env);
+	c.set("identity", identity);
+	await rateLimit(c.env.API_LIMITER, identity.email);
 	await next();
 });
 
@@ -367,6 +397,21 @@ mailbox.delete("/filters/:filterId", async (c) => {
 // ---- Writing: drafts, attachments, sending ---------------------------------
 
 mailbox.get("/settings", async (c) => c.json<MailboxSettings>(await mailboxStub(c).getSettings()));
+mailbox.get("/usage", async (c) => c.json<MailboxUsage>(await mailboxStub(c).usage()));
+
+// Everything in the mailbox as one mbox file (Thunderbird, Apple Mail, Gmail import tools…).
+mailbox.get("/export.mbox", async (c) => {
+	await heavy(c);
+	const entry = await getRegistry(c.env).getMailbox(c.req.param("mailboxId")!);
+	const name = `${(entry?.address ?? "mailbox").replace(/[^a-z0-9@._-]/gi, "_")}-${new Date().toISOString().slice(0, 10)}.mbox`;
+	return new Response(exportMbox(c.env.BUCKET, mailboxStub(c)), {
+		headers: {
+			"Content-Type": "application/mbox",
+			"Content-Disposition": contentDisposition("attachment", name),
+			"Cache-Control": "no-store",
+		},
+	});
+});
 mailbox.patch("/settings", async (c) => {
 	return c.json<MailboxSettings>(await mailboxStub(c).updateSettings(await parseBody(c.req.raw, SettingsBody)));
 });
@@ -395,6 +440,7 @@ mailbox.delete("/drafts/:draftId", async (c) => {
 
 // The file is the raw request body; its name comes in the query string.
 mailbox.post("/drafts/:draftId/attachments", async (c) => {
+	await heavy(c);
 	const filename = (c.req.query("filename") ?? "").replace(/[\u0000-\u001f/\\]+/g, "_").trim().slice(0, 255);
 	if (!filename) throw new HttpError(400, "filename is required");
 	const declared = Number(c.req.header("content-length") ?? NaN);
@@ -429,6 +475,7 @@ mailbox.delete("/drafts/:draftId/attachments/:attachmentId", async (c) => {
 });
 
 mailbox.post("/drafts/:draftId/send", async (c) => {
+	await heavy(c);
 	return c.json<SendResult>(unwrap(await mailboxStub(c).sendDraft(c.req.param("draftId"))));
 });
 mailbox.post("/drafts/:draftId/cancel-send", async (c) => {

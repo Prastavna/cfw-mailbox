@@ -10,7 +10,8 @@
 		"preview": "pnpm run build && vite preview",
 		"cf-typegen": "wrangler types --strict-vars=false",
 		"postinstall": "wrangler types --strict-vars=false",
-		"test": "vitest run"
+		"test": "vitest run",
+		"test:e2e": "playwright test"
 	},
 	"dependencies": {
 		"@fontsource-variable/geist": "^5.3.0",
@@ -42,6 +43,7 @@
 	"devDependencies": {
 		"@cloudflare/vite-plugin": "^1.66.0",
 		"@cloudflare/vitest-plugin": "^1.4.11",
+		"@playwright/test": "1.64.1",
 		"@react-router/dev": "^8.5.0",
 		"@tailwindcss/vite": "^4.2.2",
 		"@types/node": "^22",
@@ -55,23 +57,36 @@
 	},
 	"packageManager": "pnpm@12.16.1",
 	"cloudflare": {
-		"label": "cfw-mailbox",
-		"products": [
-			"Workers",
-			"Durable Objects",
-			"R2",
-			"Email Routing",
-			"Email Service"
-		],
 		"bindings": {
 			"ACCESS_TEAM_DOMAIN": {
-				"description": "Your Cloudflare Access team domain, e.g. https://myteam.cloudflareaccess.com. Shown when you enable Access on the Worker."
+				"description": "Your Cloudflare Access team domain, e.g. `https://myteam.cloudflareaccess.com`. Enable one-click Access on the Worker after deploying to get it; until it's set, the app refuses every request."
 			},
 			"ACCESS_AUD": {
-				"description": "The Access application's Audience (AUD) tag. Shown when you enable Access on the Worker."
+				"description": "The Application Audience (AUD) tag of the Access application protecting this Worker. Shown when you enable one-click Access."
 			},
 			"ADMIN_EMAILS": {
-				"description": "Comma-separated emails that can manage domains, mailboxes and members."
+				"description": "Comma-separated emails of the people who manage domains, mailboxes and members."
+			},
+			"AUTH_MODE": {
+				"description": "Leave as `access`."
+			},
+			"BUCKET": {
+				"description": "R2 bucket for raw messages, large bodies and attachments."
+			},
+			"REGISTRY": {
+				"description": "Durable Object holding domains, mailboxes and who may open them."
+			},
+			"MAILBOX": {
+				"description": "One Durable Object per mailbox: messages, threads, labels, search."
+			},
+			"EMAIL": {
+				"description": "Cloudflare Email Service, for sending. Onboard each domain with `wrangler email sending enable <domain>`."
+			},
+			"API_LIMITER": {
+				"description": "Per-user request budget (600 a minute)."
+			},
+			"HEAVY_LIMITER": {
+				"description": "Per-user budget for sends, uploads and exports (30 a minute)."
 			}
 		}
 	}

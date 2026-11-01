@@ -1,11 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Trash2 } from "lucide-react";
+import { Download, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import {
 	type FilterActions,
 	type Label,
 	type MailboxSettings,
+	type MailboxUsage,
 	type MailFilter,
 	UNDO_SEND_CHOICES,
 	type VacationSettings,
@@ -154,6 +155,7 @@ export function SettingsDialog({ mailboxId, address, labels, open, onOpenChange,
 										</select>
 									</div>
 								</div>
+								<StorageSection mailboxId={mailboxId} />
 							</TabsContent>
 
 							<TabsContent value="vacation" className="grid gap-4 pt-3">
@@ -238,6 +240,63 @@ export function SettingsDialog({ mailboxId, address, labels, open, onOpenChange,
 				)}
 			</DialogContent>
 		</Dialog>
+	);
+}
+
+function formatBytes(n: number): string {
+	const units = ["bytes", "KB", "MB", "GB", "TB"];
+	let i = 0;
+	while (n >= 1024 && i < units.length - 1) {
+		n /= 1024;
+		i++;
+	}
+	return `${i === 0 ? n : n.toFixed(n < 10 ? 1 : 0)} ${units[i]}`;
+}
+
+/** How much the mailbox holds, and a full export as an mbox file. */
+function StorageSection({ mailboxId }: { mailboxId: string }) {
+	const usage = useQuery({
+		queryKey: [...queryKeys.mailbox(mailboxId), "usage"],
+		queryFn: () => apiFetch<MailboxUsage>(`/mailboxes/${mailboxId}/usage`),
+	});
+	const percent = usage.data ? Math.min(100, (usage.data.databaseBytes / usage.data.databaseLimitBytes) * 100) : 0;
+	return (
+		<section className="grid gap-2" aria-labelledby="storage-heading">
+			<h3 id="storage-heading" className="text-sm font-medium">
+				Storage
+			</h3>
+			{usage.data ? (
+				<>
+					<p className="text-sm text-muted-foreground">
+						{usage.data.messages.toLocaleString()} message{usage.data.messages === 1 ? "" : "s"},{" "}
+						{formatBytes(usage.data.messageBytes)}. Index and metadata: {formatBytes(usage.data.databaseBytes)} of{" "}
+						{formatBytes(usage.data.databaseLimitBytes)}.
+					</p>
+					<div
+						className="h-1.5 overflow-hidden rounded-full bg-muted"
+						role="progressbar"
+						aria-label="Mailbox database used"
+						aria-valuenow={Math.round(percent)}
+						aria-valuemin={0}
+						aria-valuemax={100}
+					>
+						<div className={percent > 90 ? "h-full bg-destructive" : "h-full bg-primary"} style={{ width: `${Math.max(percent, 1)}%` }} />
+					</div>
+				</>
+			) : (
+				<p className="text-sm text-muted-foreground">{usage.isError ? "Couldn't load usage." : "Loading…"}</p>
+			)}
+			<div>
+				<Button variant="outline" size="sm" asChild>
+					<a href={`/api/mailboxes/${mailboxId}/export.mbox`} download>
+						<Download aria-hidden /> Download all mail (.mbox)
+					</a>
+				</Button>
+			</div>
+			<p className="text-xs text-muted-foreground">
+				Every message except unsent drafts, with its labels, in a file Thunderbird, Apple Mail and most mail tools can import.
+			</p>
+		</section>
 	);
 }
 

@@ -271,7 +271,7 @@ export function ThreadList({ mailboxId, mailboxAddress, folderSegment, labelId, 
 							: `No conversations in ${folderName}.`}
 				</p>
 			) : (
-				<div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto" role="list" aria-label={`${folderName} conversations`}>
+				<div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto pb-24 md:pb-0" role="list" aria-label={`${folderName} conversations`}>
 					<div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
 						{items.map((item) => {
 							const thread = threads[item.index]!;

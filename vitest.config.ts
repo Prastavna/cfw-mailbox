@@ -15,6 +15,11 @@ export default defineConfig({
 					DEV_USER_EMAIL: TEST_ADMIN,
 					ADMIN_EMAILS: TEST_ADMIN,
 				},
+				// Tests make many requests as one user; test/limits.test.ts covers the 429 path.
+				ratelimits: {
+					API_LIMITER: { namespace_id: "41001", simple: { limit: 1_000_000, period: 60 } },
+					HEAVY_LIMITER: { namespace_id: "41002", simple: { limit: 1_000_000, period: 60 } },
+				},
 			},
 		}),
 	],

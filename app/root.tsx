@@ -4,25 +4,23 @@ import { isRouteErrorResponse, Links, Meta, Outlet, Scripts, ScrollRestoration }
 
 import type { Route } from "./+types/root";
 import { Toaster } from "./components/ui/sonner";
+import { useNonce } from "./lib/nonce";
 import "./app.css";
 
-// Applied before first paint so dark-mode users don't see a white flash.
-const themeScript = `try{if(matchMedia("(prefers-color-scheme: dark)").matches)document.documentElement.classList.add("dark")}catch(e){}`;
-
 export function Layout({ children }: { children: React.ReactNode }) {
+	const nonce = useNonce();
 	return (
-		<html lang="en" suppressHydrationWarning>
+		<html lang="en">
 			<head>
 				<meta charSet="utf-8" />
 				<meta name="viewport" content="width=device-width, initial-scale=1" />
-				<script dangerouslySetInnerHTML={{ __html: themeScript }} />
 				<Meta />
-				<Links />
+				<Links nonce={nonce} />
 			</head>
 			<body>
 				{children}
-				<ScrollRestoration />
-				<Scripts />
+				<ScrollRestoration nonce={nonce} />
+				<Scripts nonce={nonce} />
 			</body>
 		</html>
 	);

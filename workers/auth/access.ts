@@ -57,8 +57,8 @@ async function resolveEmail(request: Request, env: Env): Promise<string> {
 		if (!LOCAL_HOSTS.has(new URL(request.url).hostname)) {
 			throw new HttpError(500, "AUTH_MODE=dev is only allowed on localhost");
 		}
-		// Set only in .dev.vars, so it may be missing from the generated Env type.
-		const devEmail = (env as { DEV_USER_EMAIL?: string }).DEV_USER_EMAIL;
+		// Set by `pnpm dev` (vite.config.ts), or by .dev.vars.
+		const devEmail = env.DEV_USER_EMAIL;
 		if (!devEmail) throw new HttpError(500, "AUTH_MODE=dev requires DEV_USER_EMAIL");
 		return normalizeAddress(devEmail);
 	}

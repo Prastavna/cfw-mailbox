@@ -11,6 +11,7 @@ import {
 	type DraftDetail,
 	type DraftFields,
 	type MailboxSettings,
+	type MailboxUsage,
 	type MessageLabelChange,
 	type ModifyResult,
 	type SendResult,
@@ -26,6 +27,7 @@ import type {
 	ThreadPage,
 	ThreadSummary,
 } from "../../shared/api";
+import type { MimeSource } from "../email/mime";
 import { buildEmail, describeSendError, normalizeMessageId, type OutgoingMessage, referencesHeader, transport } from "../email/outbound";
 import { htmlToText, isReplySubject, makeSnippet, normalizeSubject } from "../email/parse";
 import { runMigrations } from "../lib/migrate";
@@ -60,7 +62,29 @@ export interface IngestInput {
 	labelIds: string[];
 }
 
-export type IngestResult = { status: "stored" | "duplicate"; threadId: string };
+export type IngestResult =
+	| { status: "stored"; threadId: string; merged?: string[] }
+	| { status: "duplicate"; threadId: string }
+	| { status: "full" };
+
+/**
+ * A SQLite-backed Durable Object holds at most 10 GB. New mail is refused a little before
+ * that, so there's room left to read, delete and move what's there. Mutable for tests.
+ */
+export const STORAGE_LIMITS = { databaseBytes: 9 * 1024 ** 3 };
+
+/** One message for the mbox export: its raw copy, or what's needed to rebuild it. */
+export interface ExportItem {
+	id: string;
+	rawKey: string | null;
+	labels: string[];
+	receivedAt: number;
+	source: Omit<MimeSource, "html" | "attachments"> & {
+		html: string | null;
+		htmlKey: string | null;
+		attachments: (Omit<MimeSource["attachments"][number], "content"> & { r2Key: string })[];
+	};
+}
 
 export interface StoredAttachment {
 	filename: string;
@@ -249,6 +273,7 @@ export class MailboxDO extends DurableObject<Env> {
 
 	/** Stores a message and files it into a thread. Messages already stored (same Message-ID) are skipped. */
 	async ingest(input: IngestInput): Promise<IngestResult> {
+		if (this.ctx.storage.sql.databaseSize >= STORAGE_LIMITS.databaseBytes) return { status: "full" };
 		const result = this.ctx.storage.transactionSync((): IngestResult => {
 			if (input.messageId) {
 				const existing = this.sql
@@ -257,8 +282,11 @@ export class MailboxDO extends DurableObject<Env> {
 				if (existing) return { status: "duplicate", threadId: existing.thread_id };
 			}
 
-			const threadId = this.findThread(input) ?? this.createThread(input);
+			const [found, ...strays] = this.findThreads(input);
+			const threadId = found ?? this.createThread(input);
 			this.insertMessage(threadId, input);
+			// Replies that arrived before this message started threads of their own; join them up.
+			for (const stray of strays) this.mergeThread(stray, threadId);
 			// New mail in a snoozed conversation brings it back, like Gmail.
 			this.cancelSnoozes([threadId]);
 			if (input.labelIds.includes(SystemLabel.INBOX)) {
@@ -266,18 +294,23 @@ export class MailboxDO extends DurableObject<Env> {
 				this.recordContacts([input.from], "received", input.receivedAt);
 			}
 			this.recomputeThread(threadId);
-			return { status: "stored", threadId };
+			return { status: "stored", threadId, merged: strays };
 		});
 
 		if (result.status === "stored") {
-			this.broadcast({ type: "threads.changed", threadIds: [result.threadId] });
+			this.broadcast({ type: "threads.changed", threadIds: [result.threadId, ...(result.merged ?? [])] });
 			// A filter may have sent it to Trash, which starts the 30-day clock.
 			await this.scheduleAlarm();
 		}
 		return result;
 	}
 
-	private findThread(input: IngestInput): string | null {
+	/**
+	 * Threads this message belongs to: the thread of a message it refers to, then the threads of
+	 * replies to it that arrived first. More than one means those should become one conversation.
+	 */
+	private findThreads(input: IngestInput): string[] {
+		const threads: string[] = [];
 		const ids = [...new Set([input.inReplyTo, ...input.references].filter((x): x is string => !!x))].slice(-MAX_REFERENCES);
 		if (ids.length) {
 			const row = this.sql
@@ -287,16 +320,21 @@ export class MailboxDO extends DurableObject<Env> {
 					...ids,
 				)
 				.toArray()[0];
-			if (row) return row.thread_id;
+			if (row) threads.push(row.thread_id);
 		}
 
-		// A reply to this message may have arrived first.
+		// Replies to this message may have arrived first, naming it in In-Reply-To or References.
 		if (input.messageId) {
-			const row = this.sql
-				.exec<{ thread_id: string }>("SELECT thread_id FROM messages WHERE in_reply_to = ? LIMIT 1", input.messageId)
-				.toArray()[0];
-			if (row) return row.thread_id;
+			const rows = this.sql
+				.exec<{ thread_id: string }>(
+					`SELECT DISTINCT m.thread_id FROM message_refs r JOIN messages m ON m.id = r.message_id
+					 WHERE r.ref = ? LIMIT 20`,
+					input.messageId,
+				)
+				.toArray();
+			for (const { thread_id } of rows) if (!threads.includes(thread_id)) threads.push(thread_id);
 		}
+		if (threads.length) return threads;
 
 		// Some clients drop References; fall back to "Re: <same subject>" seen recently.
 		const normalized = normalizeSubject(input.subject);
@@ -309,9 +347,16 @@ export class MailboxDO extends DurableObject<Env> {
 					input.receivedAt - SUBJECT_THREAD_WINDOW_MS,
 				)
 				.toArray()[0];
-			if (row) return row.id;
+			if (row) return [row.id];
 		}
-		return null;
+		return [];
+	}
+
+	/** Moves every message of `from` into `into`; `from` disappears. Labels and counts follow. */
+	private mergeThread(from: string, into: string): void {
+		if (from === into) return;
+		this.sql.exec("UPDATE messages SET thread_id = ? WHERE thread_id = ?", into, from);
+		this.recomputeThread(from); // now empty: removes the thread, its labels and any snooze
 	}
 
 	private createThread(input: Pick<IngestInput, "subject">): string {
@@ -356,6 +401,8 @@ export class MailboxDO extends DurableObject<Env> {
 			input.sentAt,
 			input.receivedAt,
 		);
+		const refs = [...new Set([input.inReplyTo, ...input.references].filter((x): x is string => !!x))];
+		for (const ref of refs) this.sql.exec("INSERT OR IGNORE INTO message_refs (ref, message_id) VALUES (?, ?)", ref, input.id);
 		for (const labelId of input.labelIds) {
 			this.sql.exec(
 				"INSERT OR IGNORE INTO message_labels (message_id, label_id, added_at) SELECT ?, id, ? FROM labels WHERE id = ?",
@@ -386,14 +433,15 @@ export class MailboxDO extends DurableObject<Env> {
 	 */
 	private recomputeThread(threadId: string): void {
 		const messages = this.sql
-			.exec<{ from_address: string; from_name: string | null; snippet: string; received_at: number; has_attachments: number }>(
-				`SELECT from_address, from_name, snippet, received_at, has_attachments FROM messages WHERE thread_id = ?
+			.exec<{ from_address: string; from_name: string | null; snippet: string; subject: string; sent_at: number; received_at: number; has_attachments: number }>(
+				`SELECT from_address, from_name, snippet, subject, sent_at, received_at, has_attachments FROM messages WHERE thread_id = ?
 				 ORDER BY received_at, sent_at`,
 				threadId,
 			)
 			.toArray();
 		const latest = messages.at(-1);
-		if (!latest) {
+		const first = messages.reduce<(typeof messages)[number] | undefined>((a, m) => (!a || m.sent_at < a.sent_at ? m : a), undefined);
+		if (!latest || !first) {
 			this.sql.exec("DELETE FROM snoozes WHERE thread_id = ?", threadId);
 			this.sql.exec("DELETE FROM thread_labels WHERE thread_id = ?", threadId);
 			this.sql.exec("DELETE FROM threads WHERE id = ?", threadId);
@@ -407,8 +455,12 @@ export class MailboxDO extends DurableObject<Env> {
 			}
 		}
 		this.sql.exec(
-			`UPDATE threads SET snippet = ?, participants = ?, message_count = ?, has_attachments = ?, last_message_at = ?
+			`UPDATE threads SET subject = ?, normalized_subject = ?, snippet = ?, participants = ?, message_count = ?,
+				has_attachments = ?, last_message_at = ?
 			 WHERE id = ?`,
+			// Like Gmail, a conversation is named after its first message, even if a reply arrived first.
+			first.subject,
+			normalizeSubject(first.subject),
 			latest.snippet,
 			JSON.stringify(participants.slice(0, MAX_PARTICIPANTS)),
 			messages.length,
@@ -560,7 +612,7 @@ export class MailboxDO extends DurableObject<Env> {
 					m.raw_key IS NOT NULL AS has_raw,
 					(SELECT group_concat(label_id) FROM message_labels WHERE message_id = m.id) AS label_ids
 				 FROM messages m WHERE m.thread_id = ?
-				 ORDER BY m.received_at ASC, m.sent_at ASC`,
+				 ORDER BY m.sent_at ASC, m.received_at ASC`,
 				threadId,
 			)
 			.toArray();
@@ -820,6 +872,68 @@ export class MailboxDO extends DurableObject<Env> {
 	}
 
 	// ---- Settings ------------------------------------------------------------
+
+	/**
+	 * Messages for the mbox export, oldest first, `limit` at a time after `cursor` (a rowid).
+	 * Unsent drafts are left out.
+	 */
+	exportPage(cursor: number, limit = 100): { items: ExportItem[]; nextCursor: number | null } {
+		const rows = this.sql
+			.exec<MessageRow & { rowid: number; raw_key: string | null; in_reply_to: string | null; references: string; label_names: string | null }>(
+				`SELECT m.rowid, m.*,
+					(SELECT group_concat(l.name, char(31)) FROM message_labels ml JOIN labels l ON l.id = ml.label_id
+					  WHERE ml.message_id = m.id) AS label_names
+				 FROM messages m
+				 WHERE m.rowid > ?
+				   AND NOT EXISTS (SELECT 1 FROM message_labels ml WHERE ml.message_id = m.id AND ml.label_id IN ('DRAFT', 'OUTBOX'))
+				 ORDER BY m.rowid LIMIT ?`,
+				cursor,
+				limit + 1,
+			)
+			.toArray();
+		const page = rows.slice(0, limit);
+		const ids = page.filter((r) => !r.raw_key).map((r) => r.id);
+		const attachments = ids.length
+			? this.sql.exec<AttachmentRow>("SELECT * FROM attachments WHERE message_id IN (SELECT value FROM json_each(?)) ORDER BY rowid", JSON.stringify(ids)).toArray()
+			: [];
+		return {
+			items: page.map((m) => ({
+				id: m.id,
+				rawKey: m.raw_key,
+				labels: m.label_names ? m.label_names.split("\u001f").sort() : [],
+				receivedAt: m.received_at,
+				source: {
+					from: { name: m.from_name ?? "", address: m.from_address },
+					to: JSON.parse(m.to),
+					cc: JSON.parse(m.cc),
+					bcc: JSON.parse(m.bcc),
+					replyTo: JSON.parse(m.reply_to),
+					subject: m.subject,
+					date: m.sent_at,
+					messageId: m.message_id,
+					inReplyTo: m.in_reply_to,
+					references: JSON.parse(m.references || "[]"),
+					text: m.text_body,
+					html: m.html_body,
+					htmlKey: m.html_key,
+					attachments: attachments
+						.filter((a) => a.message_id === m.id)
+						.map((a) => ({ filename: a.filename, mimeType: a.mime_type, disposition: a.disposition, contentId: a.content_id, r2Key: a.r2_key })),
+				},
+			})),
+			nextCursor: rows.length > limit ? page.at(-1)!.rowid : null,
+		};
+	}
+
+	usage(): MailboxUsage {
+		const row = this.sql.exec<{ n: number; bytes: number }>("SELECT COUNT(*) AS n, COALESCE(SUM(size), 0) AS bytes FROM messages").one();
+		return {
+			messages: row.n,
+			messageBytes: row.bytes,
+			databaseBytes: this.ctx.storage.sql.databaseSize,
+			databaseLimitBytes: STORAGE_LIMITS.databaseBytes,
+		};
+	}
 
 	async getSettings(): Promise<MailboxSettings> {
 		const rows = this.sql.exec<{ key: string; value: string }>("SELECT key, value FROM settings").toArray();

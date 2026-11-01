@@ -220,6 +220,17 @@ export interface VacationSettings {
 	contactsOnly: boolean;
 }
 
+/** How much the mailbox stores. */
+export interface MailboxUsage {
+	messages: number;
+	/** Raw size of all messages (what R2 holds, roughly). */
+	messageBytes: number;
+	/** The mailbox database (index, metadata, bodies). */
+	databaseBytes: number;
+	/** New mail is refused once the database reaches this. */
+	databaseLimitBytes: number;
+}
+
 export interface MailboxSettings {
 	/** Plain text, added below new messages and replies. */
 	signature: string;

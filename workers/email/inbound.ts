@@ -82,8 +82,10 @@ export async function handleInbound(message: InboundMessage, env: Env): Promise<
 		};
 
 		const result = await mailbox.ingest(input);
-		if (result.status === "duplicate") {
+		if (result.status === "duplicate" || result.status === "full") {
 			await env.BUCKET.delete(uploaded);
+			// A permanent refusal, so the sender gets a bounce instead of silent loss.
+			if (result.status === "full") message.setReject("Mailbox is full");
 			return;
 		}
 		// The message is stored now: a vacation reply that fails (even at the RPC level) must not

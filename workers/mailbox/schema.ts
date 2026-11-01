@@ -264,4 +264,27 @@ export const MAILBOX_MIGRATIONS: readonly Migration[] = [
 			sql.exec("UPDATE message_labels SET added_at = ? WHERE label_id IN ('TRASH', 'SPAM')", Date.now());
 		},
 	},
+	{
+		version: 6,
+		name: "reference index",
+		sql: `
+			-- Every Message-ID a message points at (In-Reply-To and References), so a parent that
+			-- arrives after its replies can find them, however the replies named it.
+			CREATE TABLE message_refs (
+				ref TEXT NOT NULL,
+				message_id TEXT NOT NULL,
+				PRIMARY KEY (ref, message_id)
+			) WITHOUT ROWID;
+			CREATE INDEX idx_message_refs_message ON message_refs(message_id);
+			CREATE TRIGGER message_refs_cleanup AFTER DELETE ON messages BEGIN
+				DELETE FROM message_refs WHERE message_id = old.id;
+			END;
+
+			INSERT OR IGNORE INTO message_refs (ref, message_id)
+			SELECT in_reply_to, id FROM messages WHERE in_reply_to IS NOT NULL AND in_reply_to != '';
+			INSERT OR IGNORE INTO message_refs (ref, message_id)
+			SELECT j.value, m.id FROM messages m, json_each(m."references") j
+			WHERE json_valid(m."references") AND j.type = 'text' AND j.value != '';
+		`,
+	},
 ];

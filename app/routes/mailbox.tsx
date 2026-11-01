@@ -1,3 +1,4 @@
+import { Pencil } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, Outlet, useLocation, useNavigate, useParams } from "react-router";
 import { ComposeDock } from "~/components/mail/compose/ComposeWindow";
@@ -6,6 +7,7 @@ import { SettingsDialog, type SettingsTab } from "~/components/mail/SettingsDial
 import { ShortcutsHelp } from "~/components/mail/ShortcutsHelp";
 import { VacationBanner } from "~/components/mail/VacationBanner";
 import { Sidebar } from "~/components/mail/Sidebar";
+import { Button } from "~/components/ui/button";
 import { Sheet, SheetContent, SheetTitle } from "~/components/ui/sheet";
 import { TooltipProvider } from "~/components/ui/tooltip";
 import { useMediaQuery } from "~/hooks/use-media-query";
@@ -116,6 +118,13 @@ function MailboxFrame({ me, mailbox }: { me: Me; mailbox: MailboxAccess }) {
 						<Outlet context={{ me, mailbox, labels, actions, composer } satisfies MailboxContext} />
 					</main>
 				</div>
+				{/* Phones have no sidebar on screen; Compose floats over the list, as in Gmail's app. */}
+				<Button
+					className="fixed right-4 bottom-5 z-20 h-14 rounded-2xl bg-mail-compose px-5 text-mail-active-foreground shadow-lg hover:bg-mail-compose/90 md:hidden"
+					onClick={() => composer.compose()}
+				>
+					<Pencil aria-hidden /> Compose
+				</Button>
 				<ComposeDock mailbox={mailbox} />
 				<ShortcutsHelp open={helpOpen} onOpenChange={setHelpOpen} />
 				<SettingsDialog

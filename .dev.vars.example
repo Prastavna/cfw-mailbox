@@ -1,6 +1,13 @@
-# Copy to .dev.vars for local development. Never commit .dev.vars.
-#
-# "dev" trusts DEV_USER_EMAIL instead of Cloudflare Access. It only works on localhost.
-AUTH_MODE=dev
-DEV_USER_EMAIL=you@example.com
-ADMIN_EMAILS=you@example.com
+# Production secrets. The Deploy to Cloudflare button asks for these; or set each with
+#   npx wrangler secret put <NAME>
+# Local development doesn't need them: `pnpm dev` signs you in as dev@example.com (an admin).
+# To use another address locally, copy this file to .dev.vars and set
+#   DEV_USER_EMAIL=you@example.com
+#   ADMIN_EMAILS=you@example.com
+
+# Your Cloudflare Access team domain, e.g. https://myteam.cloudflareaccess.com
+ACCESS_TEAM_DOMAIN=
+# The Application Audience (AUD) tag of the Access application protecting this Worker.
+ACCESS_AUD=
+# Comma-separated emails allowed to manage domains, mailboxes and members.
+ADMIN_EMAILS=
