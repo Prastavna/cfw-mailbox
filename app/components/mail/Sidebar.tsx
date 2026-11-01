@@ -17,6 +17,7 @@ interface SidebarProps {
 	collapsed: boolean;
 	actions: MailActions;
 	onNavigate?: () => void;
+	onCompose: () => void;
 }
 
 function countFor(label: Label | undefined, mode: "unread" | "total" | "none"): number {
@@ -24,7 +25,7 @@ function countFor(label: Label | undefined, mode: "unread" | "total" | "none"): 
 	return mode === "unread" ? label.unread : label.total;
 }
 
-export function Sidebar({ mailboxId, labels, collapsed, actions, onNavigate }: SidebarProps) {
+export function Sidebar({ mailboxId, labels, collapsed, actions, onNavigate, onCompose }: SidebarProps) {
 	const userLabels = labels?.filter((l) => l.type === "user") ?? [];
 	const [dialog, setDialog] = useState<{ mode: "create" } | { mode: "edit"; label: Label } | null>(null);
 	const [removing, setRemoving] = useState<Label | null>(null);
@@ -102,23 +103,17 @@ export function Sidebar({ mailboxId, labels, collapsed, actions, onNavigate }: S
 	return (
 		<nav aria-label="Folders" className={cn("flex h-full flex-col gap-1 py-2", collapsed ? "items-center px-2" : "pr-3")}>
 			<div className={cn("mb-3", collapsed ? "" : "pl-2")}>
-				<Tooltip>
-					<TooltipTrigger asChild>
-						<span className="inline-block">
-							<Button
-								disabled
-								className={cn(
-									"h-14 rounded-2xl bg-mail-compose text-mail-active-foreground shadow-none hover:bg-mail-compose/80",
-									collapsed ? "w-14 px-0" : "gap-3 px-5 text-sm",
-								)}
-							>
-								<Pencil className="size-5" aria-hidden />
-								{!collapsed && "Compose"}
-							</Button>
-						</span>
-					</TooltipTrigger>
-					<TooltipContent side="right">Writing mail arrives in a later update</TooltipContent>
-				</Tooltip>
+				<Button
+					onClick={onCompose}
+					aria-label="Compose"
+					className={cn(
+						"h-14 rounded-2xl bg-mail-compose text-mail-active-foreground shadow-none hover:bg-mail-compose/80 hover:shadow-md",
+						collapsed ? "w-14 px-0" : "gap-3 px-5 text-sm",
+					)}
+				>
+					<Pencil className="size-5" aria-hidden />
+					{!collapsed && "Compose"}
+				</Button>
 			</div>
 
 			{SYSTEM_FOLDERS.map((f) =>

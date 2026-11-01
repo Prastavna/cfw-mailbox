@@ -155,3 +155,46 @@
     @apply font-sans;
   }
 }
+/* Composer body (TipTap). Kept close to how the mail will look to recipients. */
+.prose-mail {
+	line-height: 1.5;
+}
+.prose-mail p {
+	margin: 0;
+	min-height: 1.5em;
+}
+.prose-mail ul,
+.prose-mail ol {
+	margin: 0.25em 0;
+	padding-left: 1.75em;
+}
+.prose-mail ul {
+	list-style: disc;
+}
+.prose-mail ol {
+	list-style: decimal;
+}
+.prose-mail blockquote {
+	margin: 0.25em 0 0.25em 0.8ex;
+	border-left: 1px solid var(--border);
+	padding-left: 1ex;
+	color: var(--muted-foreground);
+}
+.prose-mail a {
+	color: var(--primary);
+	text-decoration: underline;
+}
+.prose-mail code {
+	font-family: ui-monospace, monospace;
+	font-size: 0.9em;
+	background: var(--muted);
+	border-radius: 3px;
+	padding: 0 0.25em;
+}
+.prose-mail p.is-editor-empty:first-child::before {
+	content: attr(data-placeholder);
+	float: left;
+	height: 0;
+	pointer-events: none;
+	color: var(--muted-foreground);
+}

@@ -1,29 +1,20 @@
 import { normalizeAddress } from "../../shared/address";
+import { INLINE_HTML_LIMIT, messageKeys, TEXT_LIMIT } from "../mailbox/keys";
 import { getMailbox, type IngestInput } from "../mailbox/MailboxDO";
 import { SystemLabel } from "../mailbox/schema";
 import { getRegistry } from "../registry/RegistryDO";
 import { parseMessage, type ParsedMessage } from "./parse";
 
+export { INLINE_HTML_LIMIT, messageKeys };
+
 /** Email Routing caps messages at 25 MiB; refuse anything bigger before reading it. */
 export const MAX_INBOUND_BYTES = 25 * 1024 * 1024;
-/** HTML bodies larger than this go to R2 instead of the mailbox database (rows are capped at 2 MB). */
-export const INLINE_HTML_LIMIT = 256 * 1024;
-/** Plain text kept in the database for display and search; the full body stays in the raw message. */
-export const TEXT_LIMIT = 256 * 1024;
 /** A Date header further in the future than this is treated as bogus. */
 const MAX_CLOCK_SKEW_MS = 24 * 60 * 60 * 1000;
 
 /** The parts of Email Routing's message object we use, so tests can pass a fake one. */
 export type InboundMessage = Pick<ForwardableEmailMessage, "from" | "to" | "raw" | "rawSize" | "setReject">;
 
-export function messageKeys(mailboxId: string, messageId: string) {
-	const base = `mailboxes/${mailboxId}/messages/${messageId}`;
-	return {
-		raw: `${base}/raw.eml`,
-		html: `${base}/body.html`,
-		attachment: (attachmentId: string) => `${base}/attachments/${attachmentId}`,
-	};
-}
 
 /**
  * Entry point for mail delivered by Cloudflare Email Routing: check the

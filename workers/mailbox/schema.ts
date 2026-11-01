@@ -19,10 +19,13 @@ export const SystemLabel = {
 	STARRED: "STARRED",
 	IMPORTANT: "IMPORTANT",
 	UNREAD: "UNREAD",
+	/** Sent but still inside the undo-send window (or waiting to retry). */
+	OUTBOX: "OUTBOX",
 } as const;
 export type SystemLabelId = (typeof SystemLabel)[keyof typeof SystemLabel];
 
-const systemLabelRows = Object.values(SystemLabel)
+// Frozen: the labels that existed when migration 1 was written. Later ones are added by their own migration.
+const systemLabelRows = ["INBOX", "SENT", "DRAFT", "SPAM", "TRASH", "STARRED", "IMPORTANT", "UNREAD"]
 	.map((id) => `('${id}', '${id}', 'system', NULL, 0)`)
 	.join(",\n\t\t\t\t");
 
@@ -117,6 +120,19 @@ export const MAILBOX_MIGRATIONS: readonly Migration[] = [
 			CREATE INDEX idx_threads_subject ON threads(normalized_subject, last_message_at);
 			-- Finds replies that arrived before the message they answer.
 			CREATE INDEX idx_messages_in_reply_to ON messages(in_reply_to);
+		`,
+	},
+	{
+		version: 3,
+		name: "sending",
+		sql: `
+			INSERT OR IGNORE INTO labels (id, name, type, color, created_at) VALUES ('OUTBOX', 'OUTBOX', 'system', NULL, 0);
+			-- Drafts are messages with the DRAFT label. Once sent they wait in OUTBOX until send_at.
+			ALTER TABLE messages ADD COLUMN send_at INTEGER;
+			ALTER TABLE messages ADD COLUMN send_error TEXT;
+			ALTER TABLE messages ADD COLUMN send_attempts INTEGER NOT NULL DEFAULT 0;
+			CREATE INDEX idx_messages_send_at ON messages(send_at) WHERE send_at IS NOT NULL;
+			CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 		`,
 	},
 ];

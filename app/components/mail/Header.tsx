@@ -1,4 +1,5 @@
-import { Mail, Menu, Search } from "lucide-react";
+import { Mail, Menu, Search, Settings } from "lucide-react";
+import { useState } from "react";
 import { Link } from "react-router";
 import type { MailboxAccess, Me } from "../../../shared/api";
 import { Button } from "~/components/ui/button";
@@ -6,6 +7,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "~/components/ui/tooltip
 import type { LiveStatus } from "~/lib/api";
 import { cn } from "~/lib/utils";
 import { AccountSwitcher } from "./AccountSwitcher";
+import { SettingsDialog } from "./SettingsDialog";
 
 interface HeaderProps {
 	me: Me;
@@ -15,6 +17,7 @@ interface HeaderProps {
 }
 
 export function Header({ me, mailbox, live, onToggleSidebar }: HeaderProps) {
+	const [settingsOpen, setSettingsOpen] = useState(false);
 	return (
 		<header className="flex h-16 shrink-0 items-center gap-2 px-2 sm:px-4">
 			<Button variant="ghost" size="icon-lg" className="rounded-full" onClick={onToggleSidebar} aria-label="Main menu">
@@ -55,6 +58,15 @@ export function Header({ me, mailbox, live, onToggleSidebar }: HeaderProps) {
 					{live === "live" ? "New mail appears automatically" : live === "connecting" ? "Connecting…" : "Offline, retrying"}
 				</TooltipContent>
 			</Tooltip>
+			<Tooltip>
+				<TooltipTrigger asChild>
+					<Button variant="ghost" size="icon-lg" className="rounded-full" onClick={() => setSettingsOpen(true)} aria-label="Settings">
+						<Settings className="size-5" />
+					</Button>
+				</TooltipTrigger>
+				<TooltipContent>Settings</TooltipContent>
+			</Tooltip>
+			<SettingsDialog mailboxId={mailbox.id} address={mailbox.address} open={settingsOpen} onOpenChange={setSettingsOpen} />
 			<AccountSwitcher me={me} current={mailbox} />
 		</header>
 	);

@@ -7,7 +7,7 @@ Self-hosted, Gmail-style webmail that runs entirely on your own Cloudflare accou
 - **Many users, many domains.** Admins add domains and mailboxes and grant people access. Each user switches between the mailboxes they're allowed to open.
 - **Sign-in** uses [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/). The Worker verifies every request's Access token itself and enforces per-mailbox permissions.
 
-> Status: **Phase 3 (actions)**. Mail is received, threaded and readable, and you can archive, delete, report spam, mark read or unread, star, apply labels and undo each of these. Admins manage domains, mailboxes and members at `/admin`. Next: writing mail (Phase 4).
+> Status: **Phase 4 (writing mail)**. Mail is received, threaded and readable; you can archive, delete, report spam, mark read or unread, star and label it, with undo. You can write new messages, reply, reply all and forward in Gmail-style compose windows, with rich text, attachments, auto-saved drafts, a signature and undo send. Admins manage domains, mailboxes and members at `/admin`. Next: search (Phase 5).
 
 ## Stack
 
@@ -19,15 +19,18 @@ React 19 + React Router (framework mode) · Tailwind v4 + shadcn/ui · TanStack 
 app/                 React UI
   routes/            / → last mailbox; /mail/:mailboxId/:folder[/:threadId]
   components/mail/   Header, account switcher, sidebar, thread list, conversation view
+    compose/         Compose windows, TipTap editor, recipient chips
   lib/email-html.ts  Sanitises HTML mail for a sandboxed iframe (DOMPurify + CSP)
+  lib/compose*.ts    Reply recipients, quoting, signature; compose window store
 shared/              Types and helpers used by both browser and Worker
 workers/
   app.ts             Worker entry: /api → Hono, everything else → React Router
   api/               HTTP API
   auth/access.ts     Cloudflare Access JWT verification (+ local dev mode)
   registry/          RegistryDO: domains, mailboxes, members (one global instance)
-  mailbox/           MailboxDO: one per mailbox; threads, messages, labels
+  mailbox/           MailboxDO: one per mailbox; threads, messages, labels, drafts, outbox
   email/inbound.ts   Email Routing handler
+  email/outbound.ts  Builds Email Service payloads; explains send errors
 test/                Vitest tests that run in workerd
 ```
 
@@ -47,6 +50,8 @@ curl -X POST localhost:5173/api/admin/mailboxes -H 'content-type: application/js
   -d '{"address":"hello@example.com","displayName":"Hello"}'
 ```
 
+Sending is **simulated** in local dev: nothing leaves your machine, and wrangler logs each message and writes its parts under `.wrangler/tmp/email/`. To send real mail from `pnpm dev`, add `"remote": true` to the `send_email` binding in `wrangler.jsonc` (the sending domain must be onboarded to Email Service).
+
 Checks: `pnpm test`, `pnpm run typecheck`, `pnpm run build`.
 
 ## Deploying (self-hosting)
@@ -55,7 +60,7 @@ Checks: `pnpm test`, `pnpm run typecheck`, `pnpm run build`.
 2. **Protect it with Access.** Enable [one-click Access](https://developers.cloudflare.com/changelog/post/2025-10-03-one-click-access-for-workers/) on the Worker, then set `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` from the values it shows. Without them, the API refuses every request.
 3. Set `ADMIN_EMAILS` to the people who manage domains and mailboxes.
 4. For each domain, enable **Email Routing** and add a catch-all rule that sends to this Worker. Mail to addresses that have no mailbox is rejected.
-5. Enable **Email Service** sending for each domain.
+5. Enable **Email Service** sending for each domain (`wrangler email sending enable example.com`). Until a domain is onboarded, sending from it fails with a message saying so, and the draft stays in Drafts.
 
 ## API (so far)
 
@@ -76,12 +81,27 @@ Checks: `pnpm test`, `pnpm run typecheck`, `pnpm run build`.
 | POST | `/api/mailboxes/:id/messages/modify` `{changes: [{messageId, addLabelIds, removeLabelIds}]}` | mailbox member (per-message changes and undo) |
 | POST | `/api/mailboxes/:id/threads/delete` `{threadIds}` | mailbox member (Trash/Spam only, permanent) |
 | POST/PATCH/DELETE | `/api/mailboxes/:id/labels[/:labelId]` | mailbox member (user labels) |
+| GET/PATCH | `/api/mailboxes/:id/settings` `{signature, undoSendSeconds}` | mailbox member |
+| POST | `/api/mailboxes/:id/drafts` `{to, cc, bcc, subject, html, parent?: {messageId, kind: "reply"\|"forward"}}` | mailbox member |
+| GET/PUT/DELETE | `/api/mailboxes/:id/drafts/:draftId` | mailbox member (open, save, discard) |
+| POST/DELETE | `/api/mailboxes/:id/drafts/:draftId/attachments[/:attachmentId]` | mailbox member (upload: raw body, `?filename=`) |
+| POST | `/api/mailboxes/:id/drafts/:draftId/send` | mailbox member |
+| POST | `/api/mailboxes/:id/drafts/:draftId/cancel-send` | mailbox member (undo send) |
 
 `threads?label=` takes a label ID or `ALL` (All Mail). Threads in Trash or Spam are hidden from every other view and from the counts.
 
 ## Actions and undo
 
-Every action is a label change, as in Gmail. Archive removes `INBOX`; Delete adds `TRASH`; Report spam adds `SPAM`; read and unread toggle `UNREAD`. Star and unread apply to the newest message only; everything else applies to every message in the thread. The server answers with exactly which labels changed on which messages, so **Undo** sends that change back reversed and restores the previous state precisely. `SENT` and `DRAFT` are managed by the server and can't be changed by hand.
+Every action is a label change, as in Gmail. Archive removes `INBOX`; Delete adds `TRASH`; Report spam adds `SPAM`; read and unread toggle `UNREAD`. Star and unread apply to the newest message only; everything else applies to every message in the thread. The server answers with exactly which labels changed on which messages, so **Undo** sends that change back reversed and restores the previous state precisely. `SENT`, `DRAFT` and `OUTBOX` are managed by the server and can't be changed by hand.
+
+## How sending works
+
+1. A draft is a message with the `DRAFT` label, saved as you type. A reply or forward joins the original's thread and records `In-Reply-To`/`References`; a forward also copies the original's attachments. The quoted text is kept out of the editor and appended as one block marked `gmail_quote`, so it folds away in Gmail and here.
+2. **Send** moves the draft to `OUTBOX` and sets a Durable Object alarm for the end of the undo window (5–30 seconds, or off, in Settings). **Undo** moves it back to Drafts if it hasn't gone yet.
+3. When the alarm fires, the mailbox hands the message to Cloudflare Email Service (`env.EMAIL.send`), from the mailbox's address and display name. On success it becomes `SENT` in the same thread, with the Message-ID Email Service returned, so replies to it thread correctly.
+4. If Email Service refuses the message (unverified sender, suppressed recipient, too large…), it goes back to Drafts with the reason, and open tabs show it. Temporary failures (rate limits, delivery errors) are retried after 1, 5 and 15 minutes.
+
+Limits follow Email Service: 50 recipients, 32 attachments and 25 MB per message.
 
 ## How receiving works
 

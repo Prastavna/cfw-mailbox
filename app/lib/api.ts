@@ -1,5 +1,6 @@
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 import type { ApiError, Label, MailboxEvent, Me, ThreadDetail, ThreadPage } from "../../shared/api";
 
 export class ApiRequestError extends Error {
@@ -74,9 +75,12 @@ export type LiveStatus = "connecting" | "live" | "offline";
  * mail arrives. Reconnects with backoff, and refetches everything after a
  * reconnect in case events were missed.
  */
-export function useMailboxEvents(mailboxId: string): LiveStatus {
+export function useMailboxEvents(mailboxId: string, drafts?: { openDraft: (id: string, title?: string) => void }): LiveStatus {
 	const queryClient = useQueryClient();
 	const [status, setStatus] = useState<LiveStatus>("connecting");
+	// Kept in a ref so a new callback doesn't reconnect the socket.
+	const draftsRef = useRef(drafts);
+	draftsRef.current = drafts;
 
 	useEffect(() => {
 		let ws: WebSocket | null = null;
@@ -102,6 +106,14 @@ export function useMailboxEvents(mailboxId: string): LiveStatus {
 					queryClient.invalidateQueries({ queryKey: queryKeys.labels(mailboxId) });
 					queryClient.invalidateQueries({ queryKey: [...queryKeys.mailbox(mailboxId), "threads"] });
 					for (const id of event.threadIds) queryClient.invalidateQueries({ queryKey: queryKeys.thread(mailboxId, id) });
+				} else if (event.type === "send.failed") {
+					toast.error(`"${event.subject || "(no subject)"}" wasn't sent`, {
+						description: event.error,
+						duration: 15_000,
+						action: draftsRef.current
+							? { label: "Open draft", onClick: () => draftsRef.current?.openDraft(event.draftId, event.subject) }
+							: undefined,
+					});
 				}
 			};
 			ws.onclose = () => {

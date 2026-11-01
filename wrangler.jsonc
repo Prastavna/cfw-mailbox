@@ -34,6 +34,7 @@
 	// Raw .eml files, large HTML bodies and attachments.
 	"r2_buckets": [{ "binding": "BUCKET", "bucket_name": "cfw-mailbox" }],
 
-	// Outbound mail via Cloudflare Email Service.
-	"send_email": [{ "name": "EMAIL", "remote": true }]
+	// Outbound mail via Cloudflare Email Service. Local dev simulates sends (no real mail);
+	// add "remote": true to send real mail from `pnpm dev`.
+	"send_email": [{ "name": "EMAIL" }]
 }

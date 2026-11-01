@@ -1,8 +1,10 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Archive, ChevronDown, Inbox, Mail, MailOpen, Paperclip, RefreshCw, Star, Trash2 } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router";
-import type { Label, ThreadSummary } from "../../../shared/api";
+import { toast } from "sonner";
+import type { Label, ThreadDetail, ThreadSummary } from "../../../shared/api";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { Checkbox } from "~/components/ui/checkbox";
@@ -11,7 +13,8 @@ import { Skeleton } from "~/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "~/components/ui/tooltip";
 import { useMediaQuery } from "~/hooks/use-media-query";
 import { Actions, type MailActions } from "~/lib/actions";
-import { useThreads } from "~/lib/api";
+import { apiFetch, queryKeys, useThreads } from "~/lib/api";
+import type { Composer } from "~/lib/compose-store";
 import { visibleLabelChips } from "~/lib/folders";
 import { formatListDate, participantsLabel } from "~/lib/format";
 import { cn } from "~/lib/utils";
@@ -25,6 +28,7 @@ interface ThreadListProps {
 	folderName: string;
 	labels: Label[] | undefined;
 	actions: MailActions;
+	composer: Composer;
 }
 
 const ROW_HEIGHT = 40;
@@ -32,8 +36,23 @@ const ROW_HEIGHT_MOBILE = 76;
 
 type SelectPreset = "all" | "none" | "read" | "unread" | "starred" | "unstarred";
 
-export function ThreadList({ mailboxId, mailboxAddress, folderSegment, labelId, folderName, labels, actions }: ThreadListProps) {
+export function ThreadList({ mailboxId, mailboxAddress, folderSegment, labelId, folderName, labels, actions, composer }: ThreadListProps) {
 	const query = useThreads(mailboxId, labelId);
+	const queryClient = useQueryClient();
+
+	// A conversation that is only a draft opens in a compose window, like Gmail.
+	const openDraft = async (thread: ThreadSummary) => {
+		try {
+			const detail = await queryClient.fetchQuery({
+				queryKey: queryKeys.thread(mailboxId, thread.id),
+				queryFn: () => apiFetch<ThreadDetail>(`/mailboxes/${mailboxId}/threads/${thread.id}`),
+			});
+			const draft = detail.messages.find((m) => m.labelIds.includes("DRAFT"));
+			if (draft) composer.openDraft(draft.id, draft.subject || "New Message");
+		} catch (err) {
+			toast.error(`Couldn't open the draft: ${(err as Error).message}`);
+		}
+	};
 	const threads = useMemo(() => query.data?.pages.flatMap((p) => p.threads) ?? [], [query.data]);
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const mobile = useMediaQuery("(max-width: 767px)");
@@ -173,6 +192,7 @@ export function ThreadList({ mailboxId, mailboxAddress, folderSegment, labelId, 
 										onSelect={(on) => toggle(thread.id, on)}
 										labelId={labelId}
 										actions={actions}
+										onOpenDraft={thread.messageCount === 1 && thread.labelIds.includes("DRAFT") ? () => void openDraft(thread) : undefined}
 									/>
 								</div>
 							);
@@ -194,6 +214,8 @@ interface RowProps {
 	onSelect: (selected: boolean) => void;
 	labelId: string;
 	actions: MailActions;
+	/** Set for draft-only conversations: clicking opens the composer instead of the thread. */
+	onOpenDraft?: () => void;
 }
 
 function RowIconButton({ label, onClick, children }: { label: string; onClick: () => void; children: React.ReactNode }) {
@@ -218,9 +240,20 @@ function RowIconButton({ label, onClick, children }: { label: string; onClick: (
 	);
 }
 
-function ThreadRow({ thread, href, me, chips, selected, onSelect, labelId, actions }: RowProps) {
+function ThreadRow({ thread, href, me, chips, selected, onSelect, labelId, actions, onOpenDraft }: RowProps) {
 	const starred = thread.labelIds.includes("STARRED");
-	const sender = participantsLabel(thread.participants, me);
+	const hasDraft = thread.labelIds.includes("DRAFT");
+	const sending = thread.labelIds.includes("OUTBOX");
+	const draftOnly = !!onOpenDraft;
+	const sender = draftOnly ? "" : participantsLabel(thread.participants, me);
+	const senderCell = (
+		<>
+			{sender}
+			{!draftOnly && thread.messageCount > 1 && <span className="ml-1 text-xs font-normal text-muted-foreground">{thread.messageCount}</span>}
+			{hasDraft && <span className={cn("font-normal text-destructive", !draftOnly && "ml-1")}>{draftOnly ? "Draft" : ", Draft"}</span>}
+			{sending && <span className="ml-1 font-normal text-muted-foreground">Sending…</span>}
+		</>
+	);
 	const date = formatListDate(thread.lastMessageAt);
 	const subject = thread.subject || "(no subject)";
 	const inTrashOrSpam = labelId === "TRASH" || labelId === "SPAM";
@@ -262,14 +295,16 @@ function ThreadRow({ thread, href, me, chips, selected, onSelect, labelId, actio
 
 			<Link
 				to={href}
+				onClick={(e) => {
+					if (!onOpenDraft || e.metaKey || e.ctrlKey || e.shiftKey) return;
+					e.preventDefault();
+					onOpenDraft();
+				}}
 				className="flex h-full min-w-0 flex-1 items-center gap-3 pr-4 pl-2 outline-none focus-visible:bg-mail-active/50"
-				aria-label={`${thread.unread ? "Unread, " : ""}${sender}, ${subject}, ${date}`}
+				aria-label={`${thread.unread ? "Unread, " : ""}${draftOnly ? "Draft" : sender}${hasDraft && !draftOnly ? ", Draft" : ""}, ${subject}, ${date}`}
 			>
 				{/* Desktop: one line, Gmail style. */}
-				<span className="hidden w-[180px] shrink-0 truncate md:block">
-					{sender}
-					{thread.messageCount > 1 && <span className="ml-1 text-xs font-normal text-muted-foreground">{thread.messageCount}</span>}
-				</span>
+				<span className="hidden w-[180px] shrink-0 truncate md:block">{senderCell}</span>
 				<span className="hidden min-w-0 flex-1 items-center gap-1.5 md:flex">
 					{chips.map((c) => (
 						<Badge
@@ -294,10 +329,7 @@ function ThreadRow({ thread, href, me, chips, selected, onSelect, labelId, actio
 				{/* Mobile: stacked. */}
 				<span className="flex min-w-0 flex-1 flex-col gap-0.5 md:hidden">
 					<span className="flex items-baseline gap-2">
-						<span className="flex-1 truncate">
-							{sender}
-							{thread.messageCount > 1 && <span className="ml-1 text-xs font-normal text-muted-foreground">{thread.messageCount}</span>}
-						</span>
+						<span className="flex-1 truncate">{senderCell}</span>
 						<span className={cn("shrink-0 text-xs", !thread.unread && "font-normal")}>{date}</span>
 					</span>
 					<span className="truncate">{subject}</span>

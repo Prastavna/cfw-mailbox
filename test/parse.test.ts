@@ -72,6 +72,7 @@ describe("text helpers", () => {
 
 	it("converts HTML to text", () => {
 		expect(htmlToText("<div>a</div><div>b &#x263A; &lt;c&gt;</div><script>bad()</script>")).toBe("a\nb ☺ <c>");
+		expect(htmlToText("<p>Free at <strong>noon</strong>? <a href=\"x\">Link</a>s</p><p>-- <br>Me</p>")).toBe("Free at noon? Links\n--\nMe");
 	});
 
 	it("normalises reply subjects", () => {

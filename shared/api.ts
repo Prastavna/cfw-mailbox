@@ -110,6 +110,8 @@ export interface MessageDetail {
 	labelIds: string[];
 	attachments: AttachmentInfo[];
 	authResults: AuthResults | null;
+	/** Whether "Show original" is available (sent mail has no stored raw copy). */
+	hasRaw: boolean;
 }
 
 export interface ThreadDetail {
@@ -119,7 +121,10 @@ export interface ThreadDetail {
 }
 
 /** Sent over /api/mailboxes/:id/events when something in the mailbox changes. */
-export type MailboxEvent = { type: "threads.changed"; threadIds: string[] };
+export type MailboxEvent =
+	| { type: "threads.changed"; threadIds: string[] }
+	/** A queued message couldn't be sent; it's back in Drafts with `error`. */
+	| { type: "send.failed"; draftId: string; threadId: string; subject: string; error: string };
 
 // ---- Actions ---------------------------------------------------------------
 
@@ -127,7 +132,7 @@ export type MailboxEvent = { type: "threads.changed"; threadIds: string[] };
 export const ALL_MAIL = "ALL";
 
 /** Labels the server manages itself; they can't be added or removed by hand. */
-export const MANAGED_LABELS = ["SENT", "DRAFT"] as const;
+export const MANAGED_LABELS = ["SENT", "DRAFT", "OUTBOX"] as const;
 
 export interface ModifyThreadsRequest {
 	threadIds: string[];
@@ -164,3 +169,55 @@ export interface LabelInput {
 export function invertChanges(changes: MessageLabelChange[]): MessageLabelChange[] {
 	return changes.map((c) => ({ messageId: c.messageId, addLabelIds: c.removeLabelIds, removeLabelIds: c.addLabelIds }));
 }
+
+// ---- Writing -----------------------------------------------------------------
+
+/** Fields the composer edits. `html` is the whole body, including any quoted reply. */
+export interface DraftFields {
+	to: EmailAddress[];
+	cc: EmailAddress[];
+	bcc: EmailAddress[];
+	subject: string;
+	html: string;
+}
+
+export interface CreateDraftRequest extends Partial<DraftFields> {
+	/** Reply to or forward this message (our message ID); the draft joins its thread. */
+	parent?: { messageId: string; kind: "reply" | "forward" };
+}
+
+export interface DraftDetail extends DraftFields {
+	id: string;
+	threadId: string;
+	attachments: AttachmentInfo[];
+	/** Set while the message waits out the undo-send delay. */
+	sendAt: number | null;
+	/** Why the last send attempt failed, if it did. */
+	sendError: string | null;
+	updatedAt: number;
+}
+
+export interface SendResult {
+	status: "queued" | "sent";
+	draftId: string;
+	threadId: string;
+	/** When a queued message goes out (ms since epoch). */
+	sendAt: number;
+}
+
+export interface MailboxSettings {
+	/** Plain text, added below new messages and replies. */
+	signature: string;
+	/** How long "Undo" is offered after Send, in seconds (0 sends at once). */
+	undoSendSeconds: number;
+}
+
+export const UNDO_SEND_CHOICES = [0, 5, 10, 20, 30] as const;
+
+/** Limits from Cloudflare Email Service. */
+export const SEND_LIMITS = {
+	recipients: 50,
+	attachments: 32,
+	messageBytes: 25 * 1024 * 1024,
+	subjectChars: 998,
+} as const;

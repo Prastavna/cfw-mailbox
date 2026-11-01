@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, Outlet, useLocation, useParams } from "react-router";
+import { ComposeDock } from "~/components/mail/compose/ComposeWindow";
 import { Header } from "~/components/mail/Header";
 import { Sidebar } from "~/components/mail/Sidebar";
 import { Sheet, SheetContent, SheetTitle } from "~/components/ui/sheet";
@@ -8,6 +9,7 @@ import { useMediaQuery } from "~/hooks/use-media-query";
 import type { MailboxAccess, Me } from "../../shared/api";
 import { useMailActions } from "~/lib/actions";
 import { rememberMailbox, useLabels, useMailboxEvents, useMe } from "~/lib/api";
+import { useComposer } from "~/lib/compose-store";
 import type { MailboxContext } from "~/lib/mailbox-context";
 import { cn } from "~/lib/utils";
 
@@ -37,7 +39,8 @@ export default function MailboxLayout() {
 function MailboxFrame({ me, mailbox }: { me: Me; mailbox: MailboxAccess }) {
 	const { data: labels } = useLabels(mailbox.id);
 	const actions = useMailActions(mailbox.id);
-	const live = useMailboxEvents(mailbox.id);
+	const composer = useComposer(mailbox);
+	const live = useMailboxEvents(mailbox.id, composer);
 	const desktop = useMediaQuery("(min-width: 768px)");
 	const [collapsed, setCollapsed] = useState(false);
 	const [mobileOpen, setMobileOpen] = useState(false);
@@ -71,18 +74,29 @@ function MailboxFrame({ me, mailbox }: { me: Me; mailbox: MailboxAccess }) {
 				<Header me={me} mailbox={mailbox} live={live} onToggleSidebar={toggleSidebar} />
 				<div className="flex min-h-0 flex-1">
 					<aside className={cn("hidden shrink-0 overflow-y-auto md:block", collapsed ? "w-[72px]" : "w-64")}>
-						<Sidebar mailboxId={mailbox.id} labels={labels} collapsed={collapsed} actions={actions} />
+						<Sidebar mailboxId={mailbox.id} labels={labels} collapsed={collapsed} actions={actions} onCompose={() => composer.compose()} />
 					</aside>
 					<Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
 						<SheetContent side="left" className="w-72 bg-mail-canvas p-0 pt-4">
 							<SheetTitle className="sr-only">Folders</SheetTitle>
-							<Sidebar mailboxId={mailbox.id} labels={labels} collapsed={false} actions={actions} onNavigate={() => setMobileOpen(false)} />
+							<Sidebar
+								mailboxId={mailbox.id}
+								labels={labels}
+								collapsed={false}
+								actions={actions}
+								onNavigate={() => setMobileOpen(false)}
+								onCompose={() => {
+									setMobileOpen(false);
+									composer.compose();
+								}}
+							/>
 						</SheetContent>
 					</Sheet>
 					<main className="mb-0 min-w-0 flex-1 overflow-hidden bg-mail-surface md:mr-4 md:mb-4 md:rounded-2xl">
-						<Outlet context={{ me, mailbox, labels, actions } satisfies MailboxContext} />
+						<Outlet context={{ me, mailbox, labels, actions, composer } satisfies MailboxContext} />
 					</main>
 				</div>
+				<ComposeDock mailbox={mailbox} />
 			</div>
 		</TooltipProvider>
 	);

@@ -1,9 +1,22 @@
 import { type Context, Hono } from "hono";
 import { z } from "zod";
-import type { Label, MailboxRole, Me, ModifyResult, ThreadDetail, ThreadPage } from "../../shared/api";
+import {
+	type DraftDetail,
+	type Label,
+	type MailboxRole,
+	type MailboxSettings,
+	type Me,
+	type ModifyResult,
+	SEND_LIMITS,
+	type SendResult,
+	type ThreadDetail,
+	type ThreadPage,
+	UNDO_SEND_CHOICES,
+} from "../../shared/api";
 import { domainOf, isValidAddress, isValidDomain } from "../../shared/address";
 import { authenticate, type Identity } from "../auth/access";
 import { HttpError } from "../lib/http";
+import { messageKeys } from "../mailbox/keys";
 import { getMailbox } from "../mailbox/MailboxDO";
 import { getRegistry, type Result } from "../registry/RegistryDO";
 
@@ -56,6 +69,38 @@ const UpdateLabelBody = z
 	.object({ name: LabelName.optional(), color: LabelColor.optional() })
 	.refine((b) => b.name !== undefined || b.color !== undefined, "Nothing to update");
 
+const Recipient = z.object({
+	name: z
+		.string()
+		.max(200)
+		.transform((n) => n.replace(/[\r\n"<>]+/g, " ").trim())
+		.default(""),
+	address: addressSchema,
+});
+const Recipients = z.array(Recipient).max(SEND_LIMITS.recipients).default([]);
+/** Keeps a draft row well under the 2 MB SQLite row limit (HTML plus its text version). */
+const MAX_DRAFT_HTML = 300_000;
+const DraftFieldsBody = z.object({
+	to: Recipients,
+	cc: Recipients,
+	bcc: Recipients,
+	subject: z.string().max(SEND_LIMITS.subjectChars).default(""),
+	html: z.string().max(MAX_DRAFT_HTML, "The message is too long").default(""),
+});
+const CreateDraftBody = DraftFieldsBody.extend({
+	parent: z.object({ messageId: Id, kind: z.enum(["reply", "forward"]) }).optional(),
+});
+const SettingsBody = z.object({
+	signature: z.string().max(10_000).optional(),
+	undoSendSeconds: z
+		.number()
+		.int()
+		.refine((n) => (UNDO_SEND_CHOICES as readonly number[]).includes(n), "Unsupported undo-send delay")
+		.optional(),
+});
+/** Uploads are read into memory; Email Service caps the whole message at 25 MiB anyway. */
+const MAX_UPLOAD_BYTES = SEND_LIMITS.messageBytes;
+
 /** Mail content is attacker-controlled: never let the browser sniff or run it on our origin. */
 const UNTRUSTED_CONTENT_HEADERS = {
 	"X-Content-Type-Options": "nosniff",
@@ -85,7 +130,8 @@ async function parseBody<T extends z.ZodType>(req: Request, schema: T): Promise<
 
 function unwrap<T>(result: Result<T>): T {
 	if (result.ok) return result.value;
-	throw new HttpError(result.code === "not_found" ? 404 : result.code === "conflict" ? 409 : 400, result.message);
+	const status = { not_found: 404, conflict: 409, invalid: 400, too_large: 413, rejected: 422, unavailable: 503 } as const;
+	throw new HttpError(status[result.code], result.message);
 }
 
 export const api = new Hono<AppEnv>().basePath("/api");
@@ -242,6 +288,77 @@ mailbox.get("/messages/:messageId/raw", async (c) => {
 	return new Response(object.body, {
 		headers: { "Content-Type": "text/plain; charset=utf-8", ...UNTRUSTED_CONTENT_HEADERS },
 	});
+});
+
+// ---- Writing: drafts, attachments, sending ---------------------------------
+
+mailbox.get("/settings", async (c) => c.json<MailboxSettings>(await mailboxStub(c).getSettings()));
+mailbox.patch("/settings", async (c) => {
+	return c.json<MailboxSettings>(await mailboxStub(c).updateSettings(await parseBody(c.req.raw, SettingsBody)));
+});
+
+mailbox.post("/drafts", async (c) => {
+	const request = await parseBody(c.req.raw, CreateDraftBody);
+	const mailboxId = c.req.param("mailboxId")!;
+	const entry = await getRegistry(c.env).getMailbox(mailboxId);
+	if (!entry) throw new HttpError(404, "Mailbox not found");
+	const sender = { name: entry.displayName, address: entry.address };
+	return c.json<DraftDetail>(unwrap(await mailboxStub(c).createDraft({ mailboxId, sender, request })), 201);
+});
+mailbox.get("/drafts/:draftId", async (c) => {
+	const draft = await mailboxStub(c).getDraft(c.req.param("draftId"));
+	if (!draft) throw new HttpError(404, "Draft not found");
+	return c.json<DraftDetail>(draft);
+});
+mailbox.put("/drafts/:draftId", async (c) => {
+	const fields = await parseBody(c.req.raw, DraftFieldsBody);
+	return c.json<DraftDetail>(unwrap(await mailboxStub(c).updateDraft(c.req.param("draftId"), fields)));
+});
+mailbox.delete("/drafts/:draftId", async (c) => {
+	unwrap(await mailboxStub(c).discardDraft(c.req.param("draftId")));
+	return c.body(null, 204);
+});
+
+// The file is the raw request body; its name comes in the query string.
+mailbox.post("/drafts/:draftId/attachments", async (c) => {
+	const filename = (c.req.query("filename") ?? "").replace(/[\u0000-\u001f/\\]+/g, "_").trim().slice(0, 255);
+	if (!filename) throw new HttpError(400, "filename is required");
+	const declared = Number(c.req.header("content-length") ?? NaN);
+	if (declared > MAX_UPLOAD_BYTES) throw new HttpError(413, "Attachments can be at most 25 MB");
+	const body = await c.req.arrayBuffer();
+	if (body.byteLength > MAX_UPLOAD_BYTES) throw new HttpError(413, "Attachments can be at most 25 MB");
+	const mimeType = /^[\w.+-]+\/[\w.+-]+$/.test(c.req.header("content-type")?.split(";")[0]?.trim() ?? "")
+		? c.req.header("content-type")!.split(";")[0]!.trim().toLowerCase()
+		: "application/octet-stream";
+
+	const stub = mailboxStub(c);
+	const draftId = c.req.param("draftId");
+	if (!(await stub.getDraft(draftId))) throw new HttpError(404, "Draft not found");
+	const id = crypto.randomUUID();
+	const r2Key = messageKeys(c.req.param("mailboxId")!, draftId).attachment(id);
+	await c.env.BUCKET.put(r2Key, body, { httpMetadata: { contentType: mimeType } });
+	const result = await stub.addDraftAttachment(draftId, {
+		id,
+		filename,
+		mimeType,
+		size: body.byteLength,
+		contentId: null,
+		disposition: "attachment",
+		r2Key,
+	});
+	if (!result.ok) await c.env.BUCKET.delete(r2Key);
+	return c.json(unwrap(result), 201);
+});
+mailbox.delete("/drafts/:draftId/attachments/:attachmentId", async (c) => {
+	unwrap(await mailboxStub(c).removeDraftAttachment(c.req.param("draftId"), c.req.param("attachmentId")));
+	return c.body(null, 204);
+});
+
+mailbox.post("/drafts/:draftId/send", async (c) => {
+	return c.json<SendResult>(unwrap(await mailboxStub(c).sendDraft(c.req.param("draftId"))));
+});
+mailbox.post("/drafts/:draftId/cancel-send", async (c) => {
+	return c.json<DraftDetail>(unwrap(await mailboxStub(c).cancelSend(c.req.param("draftId"))));
 });
 
 // Live updates: the mailbox Durable Object accepts the WebSocket and pushes MailboxEvents.

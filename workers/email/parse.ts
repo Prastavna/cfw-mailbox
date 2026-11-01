@@ -125,7 +125,9 @@ export function htmlToText(html: string): string {
 	return html
 		.replace(/<(script|style|head|title)\b[\s\S]*?<\/\1\s*>/gi, " ")
 		.replace(/<!--[\s\S]*?-->/g, " ")
-		.replace(/<(br|\/p|\/div|\/li|\/tr|\/h[1-6])\b[^>]*>/gi, "\n")
+		.replace(/<(br|\/p|\/div|\/li|\/tr|\/h[1-6]|\/blockquote)\b[^>]*>/gi, "\n")
+		// Inline formatting doesn't separate words: "<b>noon</b>?" is "noon?".
+		.replace(/<\/?(a|b|strong|i|em|u|s|strike|del|ins|span|font|code|small|big|sub|sup|mark|abbr)\b[^>]*>/gi, "")
 		.replace(/<[^>]+>/g, " ")
 		.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, e: string) => {
 			if (e[0] === "#") {

@@ -1,4 +1,5 @@
-import { ArrowLeft, ChevronDown, ChevronUp, EllipsisVertical, FileCode, Paperclip, Star } from "lucide-react";
+import { ArrowLeft, ChevronDown, ChevronUp, EllipsisVertical, FileCode, Forward, Paperclip, Pencil, Reply, ReplyAll, Star, Trash2 } from "lucide-react";
+import { toast } from "sonner";
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import type { Label, MessageDetail } from "../../../shared/api";
@@ -14,6 +15,8 @@ import {
 import { Skeleton } from "~/components/ui/skeleton";
 import { Actions, type MailActions } from "~/lib/actions";
 import { rawMessageUrl, useThread } from "~/lib/api";
+import { replyRecipients } from "~/lib/compose";
+import { type Composer, draftsApi } from "~/lib/compose-store";
 import { visibleLabelChips } from "~/lib/folders";
 import {
 	avatarColor,
@@ -37,14 +40,22 @@ interface ThreadViewProps {
 	currentLabelId: string;
 	labels: Label[] | undefined;
 	actions: MailActions;
+	composer: Composer;
 }
+
+const isUnsent = (m: MessageDetail) => m.labelIds.includes("DRAFT") || m.labelIds.includes("OUTBOX");
 
 /** How many collapsed messages in the middle of a thread before they fold into "N older messages". */
 const FOLD_THRESHOLD = 3;
 
-export function ThreadView({ mailboxId, mailboxAddress, threadId, backHref, currentLabelId, labels, actions }: ThreadViewProps) {
+export function ThreadView({ mailboxId, mailboxAddress, threadId, backHref, currentLabelId, labels, actions, composer }: ThreadViewProps) {
 	const { data, isPending, isError, error } = useThread(mailboxId, threadId);
-	const messages = data?.messages ?? [];
+	const all = data?.messages ?? [];
+	// Drafts (and messages waiting to send) sit below the conversation, like Gmail.
+	const messages = all.filter((m) => !isUnsent(m));
+	const unsent = all.filter(isUnsent);
+	const lastMessage = messages.at(-1);
+	const canReplyAll = !!lastMessage && replyRecipients(lastMessage, mailboxAddress, true).to.length + replyRecipients(lastMessage, mailboxAddress, true).cc.length > 1;
 	const navigate = useNavigate();
 	const [expanded, setExpanded] = useState<Set<string>>(new Set());
 	const [unfolded, setUnfolded] = useState(false);
@@ -55,7 +66,7 @@ export function ThreadView({ mailboxId, mailboxAddress, threadId, backHref, curr
 		if (!data || initialised.current === threadId) return;
 		initialised.current = threadId;
 		const ids = new Set(data.messages.filter((m) => m.labelIds.includes("UNREAD")).map((m) => m.id));
-		const last = data.messages.at(-1);
+		const last = data.messages.filter((m) => !isUnsent(m)).at(-1);
 		if (last) ids.add(last.id);
 		setExpanded(ids);
 		setUnfolded(false);
@@ -144,10 +155,30 @@ export function ThreadView({ mailboxId, mailboxAddress, threadId, backHref, curr
 									onToggleStar={() =>
 										actions.modifyMessage(m.id, m.labelIds.includes("STARRED") ? Actions.unstar : Actions.star)
 									}
-									isLast={i === messages.length - 1}
+									onReply={(all) => void composer.reply(m, all)}
+									onForward={() => void composer.forward(m)}
+									isLast={i === messages.length - 1 && unsent.length === 0}
 								/>
 							);
 						})}
+						{unsent.map((m) => (
+							<DraftCard key={m.id} mailboxId={mailboxId} message={m} composer={composer} />
+						))}
+						{lastMessage && (
+							<div className="flex flex-wrap gap-2 px-4 pt-2 sm:pl-[72px]">
+								<Button variant="outline" className="rounded-full px-5" onClick={() => void composer.reply(lastMessage)}>
+									<Reply aria-hidden /> Reply
+								</Button>
+								{canReplyAll && (
+									<Button variant="outline" className="rounded-full px-5" onClick={() => void composer.reply(lastMessage, true)}>
+										<ReplyAll aria-hidden /> Reply all
+									</Button>
+								)}
+								<Button variant="outline" className="rounded-full px-5" onClick={() => void composer.forward(lastMessage)}>
+									<Forward aria-hidden /> Forward
+								</Button>
+							</div>
+						)}
 					</article>
 				)}
 			</div>
@@ -163,9 +194,11 @@ interface MessageCardProps {
 	isLast: boolean;
 	onToggle: () => void;
 	onToggleStar: () => void;
+	onReply: (all: boolean) => void;
+	onForward: () => void;
 }
 
-function MessageCard({ mailboxId, me, message, expanded, isLast, onToggle, onToggleStar }: MessageCardProps) {
+function MessageCard({ mailboxId, me, message, expanded, isLast, onToggle, onToggleStar, onReply, onForward }: MessageCardProps) {
 	const [showDetails, setShowDetails] = useState(false);
 	const starred = message.labelIds.includes("STARRED");
 	const hasFiles = message.attachments.some((a) => a.disposition === "attachment");
@@ -220,6 +253,9 @@ function MessageCard({ mailboxId, me, message, expanded, isLast, onToggle, onTog
 						>
 							<Star className={cn("size-4", starred ? "fill-amber-400 text-amber-400" : "text-muted-foreground")} />
 						</Button>
+						<Button variant="ghost" size="icon-sm" className="-mt-1 rounded-full" onClick={() => onReply(false)} aria-label="Reply">
+							<Reply className="size-4" />
+						</Button>
 						<DropdownMenu>
 							<DropdownMenuTrigger asChild>
 								<Button variant="ghost" size="icon-sm" className="-mt-1 rounded-full" aria-label="More">
@@ -227,11 +263,22 @@ function MessageCard({ mailboxId, me, message, expanded, isLast, onToggle, onTog
 								</Button>
 							</DropdownMenuTrigger>
 							<DropdownMenuContent align="end">
-								<DropdownMenuItem asChild>
-									<a href={rawMessageUrl(mailboxId, message.id)} target="_blank" rel="noopener noreferrer">
-										<FileCode className="size-4" /> Show original
-									</a>
+								<DropdownMenuItem onSelect={() => onReply(false)}>
+									<Reply className="size-4" /> Reply
 								</DropdownMenuItem>
+								<DropdownMenuItem onSelect={() => onReply(true)}>
+									<ReplyAll className="size-4" /> Reply all
+								</DropdownMenuItem>
+								<DropdownMenuItem onSelect={onForward}>
+									<Forward className="size-4" /> Forward
+								</DropdownMenuItem>
+								{message.hasRaw && (
+									<DropdownMenuItem asChild>
+										<a href={rawMessageUrl(mailboxId, message.id)} target="_blank" rel="noopener noreferrer">
+											<FileCode className="size-4" /> Show original
+										</a>
+									</DropdownMenuItem>
+								)}
 							</DropdownMenuContent>
 						</DropdownMenu>
 					</div>
@@ -253,6 +300,42 @@ function MessageCard({ mailboxId, me, message, expanded, isLast, onToggle, onTog
 					</div>
 				</div>
 			</div>
+		</div>
+	);
+}
+
+/** An unsent reply in the conversation: open it in the composer or throw it away. */
+function DraftCard({ mailboxId, message, composer }: { mailboxId: string; message: MessageDetail; composer: Composer }) {
+	const sending = message.labelIds.includes("OUTBOX");
+	const discard = async () => {
+		try {
+			await draftsApi.discard(mailboxId, message.id);
+			toast("Draft discarded.");
+		} catch (err) {
+			toast.error(`Couldn't discard the draft: ${(err as Error).message}`);
+		}
+	};
+	return (
+		<div className="flex items-center gap-3 border-t px-4 py-3 text-sm sm:gap-4">
+			<Avatar className="size-10 shrink-0">
+				<AvatarFallback className="bg-muted text-muted-foreground">
+					<Pencil className="size-4" aria-hidden />
+				</AvatarFallback>
+			</Avatar>
+			<div className="min-w-0 flex-1">
+				<span className={cn("font-medium", sending ? "text-muted-foreground" : "text-destructive")}>{sending ? "Sending…" : "Draft"}</span>
+				<span className="ml-3 truncate text-muted-foreground">{message.snippet || "(no text)"}</span>
+			</div>
+			{!sending && (
+				<>
+					<Button variant="ghost" size="sm" className="rounded-full" onClick={() => composer.openDraft(message.id, message.subject)}>
+						<Pencil aria-hidden /> Edit
+					</Button>
+					<Button variant="ghost" size="icon-sm" className="rounded-full" onClick={() => void discard()} aria-label="Discard draft">
+						<Trash2 className="size-4" />
+					</Button>
+				</>
+			)}
 		</div>
 	);
 }
