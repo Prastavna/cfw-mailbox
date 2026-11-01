@@ -1,70 +1,36 @@
 import { Mail } from "lucide-react";
-import type { MailboxAccess } from "../../shared/api";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "~/components/ui/card";
-import { useMe } from "~/lib/api";
+import { Navigate } from "react-router";
+import { lastMailbox, useMe } from "~/lib/api";
 import type { Route } from "./+types/home";
 
 export function meta(_: Route.MetaArgs) {
 	return [{ title: "Mail" }];
 }
 
-function groupByDomain(mailboxes: MailboxAccess[]) {
-	const groups = new Map<string, MailboxAccess[]>();
-	for (const m of mailboxes) groups.set(m.domain, [...(groups.get(m.domain) ?? []), m]);
-	return [...groups.entries()];
-}
-
-/**
- * Phase 0 landing page: proves sign-in and the mailbox directory work end to
- * end. Replaced by the Gmail-style shell and account switcher in Phase 2.
- */
+/** Sends the user to their last-used mailbox (or the first one they can open). */
 export default function Home() {
 	const { data: me, error, isPending } = useMe();
 
+	if (me && me.mailboxes.length > 0) {
+		const remembered = lastMailbox();
+		const target = me.mailboxes.find((m) => m.id === remembered) ?? me.mailboxes[0]!;
+		return <Navigate to={`/mail/${target.id}/inbox`} replace />;
+	}
+
 	return (
-		<main className="mx-auto flex min-h-svh max-w-xl flex-col gap-6 p-6 pt-16">
-			<div className="flex items-center gap-2 text-2xl font-medium">
-				<Mail className="size-7" aria-hidden />
-				Mail
-			</div>
-
-			{isPending && <p className="text-muted-foreground">Loading…</p>}
+		<main className="flex min-h-svh flex-col items-center justify-center gap-4 bg-mail-canvas p-6 text-center">
+			<Mail className="size-10 text-primary" aria-hidden />
+			{isPending && <p className="text-muted-foreground">Loading your mail…</p>}
 			{error && <p className="text-destructive">Couldn't sign you in: {error.message}</p>}
-
 			{me && (
-				<Card>
-					<CardHeader>
-						<CardTitle>{me.email}</CardTitle>
-						<CardDescription>
-							{me.isAdmin ? "Administrator" : "User"} · {me.mailboxes.length} mailbox
-							{me.mailboxes.length === 1 ? "" : "es"}
-						</CardDescription>
-					</CardHeader>
-					<CardContent className="flex flex-col gap-4">
-						{me.mailboxes.length === 0 && (
-							<p className="text-muted-foreground text-sm">
-								{me.isAdmin
-									? "No mailboxes yet. Add a domain and a mailbox through the admin API (an admin screen comes in a later phase)."
-									: "You don't have access to any mailboxes yet. Ask an administrator to add you."}
-							</p>
-						)}
-						{groupByDomain(me.mailboxes).map(([domain, list]) => (
-							<section key={domain}>
-								<h2 className="text-muted-foreground mb-1 text-xs font-medium uppercase tracking-wide">{domain}</h2>
-								<ul>
-									{list.map((m) => (
-										<li key={m.id} className="flex justify-between py-1 text-sm">
-											<span>
-												{m.displayName} <span className="text-muted-foreground">&lt;{m.address}&gt;</span>
-											</span>
-											<span className="text-muted-foreground">{m.role}</span>
-										</li>
-									))}
-								</ul>
-							</section>
-						))}
-					</CardContent>
-				</Card>
+				<div className="max-w-md space-y-2">
+					<p className="font-medium">Signed in as {me.email}</p>
+					<p className="text-muted-foreground text-sm">
+						{me.isAdmin
+							? "There are no mailboxes yet. Add a domain and a mailbox through the admin API (see the README)."
+							: "You don't have access to any mailboxes yet. Ask an administrator to add you."}
+					</p>
+				</div>
 			)}
 		</main>
 	);

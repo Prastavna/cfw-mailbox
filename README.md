@@ -7,7 +7,7 @@ Self-hosted, Gmail-style webmail that runs entirely on your own Cloudflare accou
 - **Many users, many domains.** Admins add domains and mailboxes and grant people access. Each user switches between the mailboxes they're allowed to open.
 - **Sign-in** uses [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/). The Worker verifies every request's Access token itself and enforces per-mailbox permissions.
 
-> Status: **Phase 1 (receiving)**. Sign-in, the mailbox directory and the admin API work, and mail is received, threaded and readable over the API, with live updates. The Gmail-style UI (Phase 2) and sending come next.
+> Status: **Phase 2 (reading UI)**. Mail is received and threaded, and the Gmail-style web app shows it: folder sidebar, account switcher, thread list, conversation view and live updates. Next: actions such as archive, read/unread, star and labels (Phase 3), then writing mail (Phase 4).
 
 ## Stack
 
@@ -16,7 +16,10 @@ React 19 + React Router (framework mode) · Tailwind v4 + shadcn/ui · TanStack 
 ## Layout
 
 ```
-app/                 React UI (routes, components, shadcn/ui)
+app/                 React UI
+  routes/            / → last mailbox; /mail/:mailboxId/:folder[/:threadId]
+  components/mail/   Header, account switcher, sidebar, thread list, conversation view
+  lib/email-html.ts  Sanitises HTML mail for a sandboxed iframe (DOMPurify + CSP)
 shared/              Types and helpers used by both browser and Worker
 workers/
   app.ts             Worker entry: /api → Hono, everything else → React Router
@@ -83,6 +86,10 @@ To try it locally while `pnpm dev` runs, post a raw message to the local email e
 curl -X POST "localhost:5173/cdn-cgi/handler/email?from=alice@sender.test&to=hello@example.com" \
   --data-binary $'From: alice@sender.test\r\nTo: hello@example.com\r\nSubject: Hi\r\n\r\nHello!\r\n'
 ```
+
+## Reading mail safely
+
+HTML mail is sanitised with DOMPurify, which strips scripts, event handlers, forms and embeds. It is then rendered in an iframe with no script permission. A Content Security Policy inside that iframe blocks remote images, CSS backgrounds and fonts until the user clicks **Display images**, so senders can't track opens. `cid:` images are served from the message's own attachments, and links open in a new tab without a referrer.
 
 ## License
 

@@ -46,6 +46,33 @@
   --radius-2xl: calc(var(--radius) * 1.8);
   --radius-3xl: calc(var(--radius) * 2.2);
   --radius-4xl: calc(var(--radius) * 2.6);
+  --color-mail-canvas: var(--mail-canvas);
+  --color-mail-surface: var(--mail-surface);
+  --color-mail-row-read: var(--mail-row-read);
+  --color-mail-active: var(--mail-active);
+  --color-mail-active-foreground: var(--mail-active-foreground);
+  --color-mail-compose: var(--mail-compose);
+  --color-mail-hover: var(--mail-hover);
+}
+
+/* Mail chrome, modelled on Gmail's palette. */
+:root {
+  --mail-canvas: #f6f8fc;
+  --mail-surface: #ffffff;
+  --mail-row-read: #f2f6fc;
+  --mail-active: #d3e3fd;
+  --mail-active-foreground: #041e49;
+  --mail-compose: #c2e7ff;
+  --mail-hover: #e8eaed;
+}
+.dark {
+  --mail-canvas: #111214;
+  --mail-surface: #1d1e20;
+  --mail-row-read: #18191b;
+  --mail-active: #0b3a6b;
+  --mail-active-foreground: #d3e3fd;
+  --mail-compose: #004a77;
+  --mail-hover: #2a2b2e;
 }
 
 :root {
@@ -55,7 +82,7 @@
   --card-foreground: oklch(0.145 0 0);
   --popover: oklch(1 0 0);
   --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
+  --primary: oklch(0.49 0.2 262);
   --primary-foreground: oklch(0.985 0 0);
   --secondary: oklch(0.97 0 0);
   --secondary-foreground: oklch(0.205 0 0);
@@ -90,8 +117,8 @@
   --card-foreground: oklch(0.985 0 0);
   --popover: oklch(0.205 0 0);
   --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
+  --primary: oklch(0.8 0.1 262);
+  --primary-foreground: oklch(0.2 0.03 262);
   --secondary: oklch(0.269 0 0);
   --secondary-foreground: oklch(0.985 0 0);
   --muted: oklch(0.269 0 0);

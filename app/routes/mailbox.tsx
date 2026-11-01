@@ -1,0 +1,95 @@
+import { useEffect, useState } from "react";
+import { Link, Outlet, useLocation, useParams } from "react-router";
+import { Header } from "~/components/mail/Header";
+import { Sidebar } from "~/components/mail/Sidebar";
+import { Sheet, SheetContent, SheetTitle } from "~/components/ui/sheet";
+import { TooltipProvider } from "~/components/ui/tooltip";
+import { useMediaQuery } from "~/hooks/use-media-query";
+import { rememberMailbox, useLabels, useMailboxEvents, useMe } from "~/lib/api";
+import type { MailboxContext } from "~/lib/mailbox-context";
+import { cn } from "~/lib/utils";
+
+const COLLAPSED_KEY = "cfw-mailbox:sidebar-collapsed";
+
+/** Gmail-style frame: header, folder sidebar and the main panel, for one mailbox. */
+export default function MailboxLayout() {
+	const { mailboxId = "" } = useParams();
+	const { data: me, isPending, error } = useMe();
+	const mailbox = me?.mailboxes.find((m) => m.id === mailboxId);
+
+	if (isPending) return <div className="min-h-svh bg-mail-canvas" aria-busy />;
+	if (error) return <FullPageMessage>Couldn't sign you in: {error.message}</FullPageMessage>;
+	if (!mailbox) {
+		return (
+			<FullPageMessage>
+				This mailbox doesn't exist or you don't have access to it.{" "}
+				<Link to="/" className="text-primary underline">
+					Go to your mail
+				</Link>
+			</FullPageMessage>
+		);
+	}
+	return <MailboxFrame key={mailbox.id} context={{ me: me!, mailbox, labels: undefined }} />;
+}
+
+function MailboxFrame({ context }: { context: MailboxContext }) {
+	const { mailbox } = context;
+	const { data: labels } = useLabels(mailbox.id);
+	const live = useMailboxEvents(mailbox.id);
+	const desktop = useMediaQuery("(min-width: 768px)");
+	const [collapsed, setCollapsed] = useState(false);
+	const [mobileOpen, setMobileOpen] = useState(false);
+	const location = useLocation();
+
+	useEffect(() => rememberMailbox(mailbox.id), [mailbox.id]);
+	useEffect(() => {
+		try {
+			setCollapsed(localStorage.getItem(COLLAPSED_KEY) === "1");
+		} catch {
+			// Storage unavailable; default to expanded.
+		}
+	}, []);
+	useEffect(() => setMobileOpen(false), [location.pathname]);
+
+	const toggleSidebar = () => {
+		if (!desktop) return setMobileOpen((v) => !v);
+		setCollapsed((v) => {
+			try {
+				localStorage.setItem(COLLAPSED_KEY, v ? "0" : "1");
+			} catch {
+				// Not important.
+			}
+			return !v;
+		});
+	};
+
+	return (
+		<TooltipProvider delayDuration={400}>
+			<div className="flex h-svh flex-col bg-mail-canvas text-foreground">
+				<Header me={context.me} mailbox={mailbox} live={live} onToggleSidebar={toggleSidebar} />
+				<div className="flex min-h-0 flex-1">
+					<aside className={cn("hidden shrink-0 overflow-y-auto md:block", collapsed ? "w-[72px]" : "w-64")}>
+						<Sidebar mailboxId={mailbox.id} labels={labels} collapsed={collapsed} />
+					</aside>
+					<Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
+						<SheetContent side="left" className="w-72 bg-mail-canvas p-0 pt-4">
+							<SheetTitle className="sr-only">Folders</SheetTitle>
+							<Sidebar mailboxId={mailbox.id} labels={labels} collapsed={false} onNavigate={() => setMobileOpen(false)} />
+						</SheetContent>
+					</Sheet>
+					<main className="mb-0 min-w-0 flex-1 overflow-hidden bg-mail-surface md:mr-4 md:mb-4 md:rounded-2xl">
+						<Outlet context={{ ...context, labels } satisfies MailboxContext} />
+					</main>
+				</div>
+			</div>
+		</TooltipProvider>
+	);
+}
+
+function FullPageMessage({ children }: { children: React.ReactNode }) {
+	return (
+		<div className="flex min-h-svh items-center justify-center bg-mail-canvas p-6">
+			<p className="max-w-md text-center text-sm">{children}</p>
+		</div>
+	);
+}
