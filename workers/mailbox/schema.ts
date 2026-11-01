@@ -1,7 +1,9 @@
-import { index, integer, primaryKey, sqliteTable, text } from "drizzle-orm/sqlite-core";
 import type { Migration } from "../lib/migrate";
 
 /**
+ * MailboxDO queries its SQLite database directly (see MailboxDO.ts); this file
+ * holds the schema as migrations.
+ *
  * Gmail-style data model: everything is a label (INBOX, SENT, STARRED,
  * UNREAD, …). "Archive" means removing INBOX. A thread carries the union of
  * its messages' labels, kept denormalised in `thread_labels` so listing a
@@ -19,116 +21,6 @@ export const SystemLabel = {
 	UNREAD: "UNREAD",
 } as const;
 export type SystemLabelId = (typeof SystemLabel)[keyof typeof SystemLabel];
-
-export const labels = sqliteTable("labels", {
-	id: text("id").primaryKey(),
-	name: text("name").notNull(),
-	type: text("type", { enum: ["system", "user"] }).notNull(),
-	color: text("color"),
-	createdAt: integer("created_at").notNull(),
-});
-
-export const threads = sqliteTable(
-	"threads",
-	{
-		id: text("id").primaryKey(),
-		subject: text("subject").notNull(),
-		snippet: text("snippet").notNull(),
-		/** JSON array of { name, address } for the thread-list "From" column. */
-		participants: text("participants").notNull(),
-		messageCount: integer("message_count").notNull(),
-		hasAttachments: integer("has_attachments", { mode: "boolean" }).notNull(),
-		lastMessageAt: integer("last_message_at").notNull(),
-	},
-	(t) => [index("idx_threads_last").on(t.lastMessageAt)],
-);
-
-export const threadLabels = sqliteTable(
-	"thread_labels",
-	{
-		threadId: text("thread_id")
-			.notNull()
-			.references(() => threads.id, { onDelete: "cascade" }),
-		labelId: text("label_id")
-			.notNull()
-			.references(() => labels.id, { onDelete: "cascade" }),
-		/** Copy of threads.last_message_at so a label listing needs only this index. */
-		lastMessageAt: integer("last_message_at").notNull(),
-	},
-	(t) => [primaryKey({ columns: [t.threadId, t.labelId] }), index("idx_thread_labels_list").on(t.labelId, t.lastMessageAt)],
-);
-
-export const messages = sqliteTable(
-	"messages",
-	{
-		id: text("id").primaryKey(),
-		threadId: text("thread_id")
-			.notNull()
-			.references(() => threads.id, { onDelete: "cascade" }),
-		/** RFC 5322 Message-ID header, without angle brackets. */
-		messageId: text("message_id"),
-		inReplyTo: text("in_reply_to"),
-		/** JSON array of Message-IDs from the References header. */
-		references: text("references"),
-		fromAddress: text("from_address").notNull(),
-		fromName: text("from_name"),
-		/** JSON arrays of { name, address }. */
-		to: text("to").notNull(),
-		cc: text("cc").notNull(),
-		bcc: text("bcc").notNull(),
-		replyTo: text("reply_to").notNull(),
-		subject: text("subject").notNull(),
-		snippet: text("snippet").notNull(),
-		/** Plain-text body (also what search indexes). */
-		textBody: text("text_body"),
-		/** HTML body when small enough to keep inline; otherwise in R2 at html_key. */
-		htmlBody: text("html_body"),
-		htmlKey: text("html_key"),
-		/** Original message in R2. */
-		rawKey: text("raw_key"),
-		size: integer("size").notNull(),
-		hasAttachments: integer("has_attachments", { mode: "boolean" }).notNull(),
-		/** JSON: SPF/DKIM/DMARC results recorded on receipt. */
-		authResults: text("auth_results"),
-		/** Date header, falling back to receipt time. */
-		sentAt: integer("sent_at").notNull(),
-		receivedAt: integer("received_at").notNull(),
-	},
-	(t) => [
-		index("idx_messages_thread").on(t.threadId, t.sentAt),
-		index("idx_messages_message_id").on(t.messageId),
-	],
-);
-
-export const messageLabels = sqliteTable(
-	"message_labels",
-	{
-		messageId: text("message_id")
-			.notNull()
-			.references(() => messages.id, { onDelete: "cascade" }),
-		labelId: text("label_id")
-			.notNull()
-			.references(() => labels.id, { onDelete: "cascade" }),
-	},
-	(t) => [primaryKey({ columns: [t.messageId, t.labelId] }), index("idx_message_labels_label").on(t.labelId)],
-);
-
-export const attachments = sqliteTable(
-	"attachments",
-	{
-		id: text("id").primaryKey(),
-		messageId: text("message_id")
-			.notNull()
-			.references(() => messages.id, { onDelete: "cascade" }),
-		filename: text("filename").notNull(),
-		mimeType: text("mime_type").notNull(),
-		size: integer("size").notNull(),
-		contentId: text("content_id"),
-		disposition: text("disposition", { enum: ["attachment", "inline"] }).notNull(),
-		r2Key: text("r2_key").notNull(),
-	},
-	(t) => [index("idx_attachments_message").on(t.messageId)],
-);
 
 const systemLabelRows = Object.values(SystemLabel)
 	.map((id) => `('${id}', '${id}', 'system', NULL, 0)`)
@@ -214,6 +106,17 @@ export const MAILBOX_MIGRATIONS: readonly Migration[] = [
 				r2_key TEXT NOT NULL
 			);
 			CREATE INDEX idx_attachments_message ON attachments(message_id);
+		`,
+	},
+	{
+		version: 2,
+		name: "threading",
+		sql: `
+			-- Subject with Re:/Fwd: stripped, for threading replies that lack References.
+			ALTER TABLE threads ADD COLUMN normalized_subject TEXT NOT NULL DEFAULT '';
+			CREATE INDEX idx_threads_subject ON threads(normalized_subject, last_message_at);
+			-- Finds replies that arrived before the message they answer.
+			CREATE INDEX idx_messages_in_reply_to ON messages(in_reply_to);
 		`,
 	},
 ];

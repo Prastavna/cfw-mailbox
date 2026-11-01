@@ -1,6 +1,6 @@
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
 import { z } from "zod";
-import type { Me, MailboxRole } from "../../shared/api";
+import type { MailboxRole, Me, ThreadDetail, ThreadPage } from "../../shared/api";
 import { domainOf, isValidAddress, isValidDomain } from "../../shared/address";
 import { authenticate, type Identity } from "../auth/access";
 import { HttpError } from "../lib/http";
@@ -21,8 +21,31 @@ const CreateMailboxBody = z.object({
 	ownerEmail: addressSchema.optional(),
 });
 const SetMemberBody = z.object({ email: addressSchema, role: z.enum(["owner", "member"]) });
+const ListThreadsQuery = z.object({
+	label: z.string().min(1).max(100).default("INBOX"),
+	cursor: z.string().max(200).optional(),
+	limit: z.coerce.number().int().min(1).max(100).default(50),
+}).transform(({ label, ...rest }) => ({ labelId: label, ...rest }));
+
+/** Mail content is attacker-controlled: never let the browser sniff or run it on our origin. */
+const UNTRUSTED_CONTENT_HEADERS = {
+	"X-Content-Type-Options": "nosniff",
+	"Content-Security-Policy": "sandbox; default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'",
+	"Cache-Control": "private, max-age=3600",
+};
+const SAFE_INLINE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp", "image/bmp", "image/avif"]);
+
+function contentDisposition(type: "inline" | "attachment", filename: string): string {
+	const ascii = filename.replace(/[^\x20-\x7e]|["\\]/g, "_");
+	const encoded = encodeURIComponent(filename).replace(/['()*]/g, (ch) => `%${ch.charCodeAt(0).toString(16).toUpperCase()}`);
+	return `${type}; filename="${ascii}"; filename*=UTF-8''${encoded}`;
+}
 
 async function parseBody<T extends z.ZodType>(req: Request, schema: T): Promise<z.infer<T>> {
+	// Requiring JSON forces a CORS preflight for cross-site requests, which blocks form-based CSRF.
+	if (!req.headers.get("content-type")?.toLowerCase().startsWith("application/json")) {
+		throw new HttpError(415, "Content-Type must be application/json");
+	}
 	const json = await req.json().catch(() => {
 		throw new HttpError(400, "Body must be JSON");
 	});
@@ -46,6 +69,18 @@ api.onError((err, c) => {
 api.notFound((c) => c.json({ error: "Not found" }, 404));
 
 api.get("/health", (c) => c.json({ ok: true }));
+
+// The UI is served from this same origin, so a browser request from anywhere
+// else that changes state (or opens a WebSocket) is cross-site and refused.
+api.use("*", async (c, next) => {
+	const origin = c.req.header("Origin");
+	const unsafe = c.req.method !== "GET" && c.req.method !== "HEAD";
+	const websocket = c.req.header("Upgrade")?.toLowerCase() === "websocket";
+	if (origin && (unsafe || websocket) && origin !== new URL(c.req.url).origin) {
+		throw new HttpError(403, "Cross-origin request refused");
+	}
+	await next();
+});
 
 // Everything below requires a signed-in user.
 api.use("*", async (c, next) => {
@@ -113,6 +148,51 @@ mailbox.use("*", async (c, next) => {
 	await next();
 });
 
-mailbox.get("/labels", async (c) => c.json(await getMailbox(c.env, c.req.param("mailboxId")!).listLabels()));
+const mailboxStub = (c: Context<AppEnv>) => getMailbox(c.env, c.req.param("mailboxId")!);
+
+mailbox.get("/labels", async (c) => c.json(await mailboxStub(c).listLabels()));
+
+mailbox.get("/threads", async (c) => {
+	const q = ListThreadsQuery.safeParse(c.req.query());
+	if (!q.success) throw new HttpError(400, q.error.issues.map((i) => i.message).join("; "));
+	return c.json<ThreadPage>(await mailboxStub(c).listThreads(q.data));
+});
+
+mailbox.get("/threads/:threadId", async (c) => {
+	const thread = await mailboxStub(c).getThread(c.req.param("threadId"));
+	if (!thread) throw new HttpError(404, "Thread not found");
+	return c.json<ThreadDetail>(thread);
+});
+
+mailbox.get("/messages/:messageId/attachments/:attachmentId", async (c) => {
+	const meta = await mailboxStub(c).getAttachment(c.req.param("messageId"), c.req.param("attachmentId"));
+	const object = meta && (await c.env.BUCKET.get(meta.r2Key));
+	if (!meta || !object) throw new HttpError(404, "Attachment not found");
+	// Only images may render in the page (for inline cid: images); everything else downloads.
+	const inline = c.req.query("inline") === "1" && SAFE_INLINE_TYPES.has(meta.mimeType);
+	return new Response(object.body, {
+		headers: {
+			"Content-Type": inline ? meta.mimeType : "application/octet-stream",
+			"Content-Length": String(object.size),
+			"Content-Disposition": contentDisposition(inline ? "inline" : "attachment", meta.filename),
+			...UNTRUSTED_CONTENT_HEADERS,
+		},
+	});
+});
+
+mailbox.get("/messages/:messageId/raw", async (c) => {
+	const key = await mailboxStub(c).getRawKey(c.req.param("messageId"));
+	const object = key && (await c.env.BUCKET.get(key));
+	if (!object) throw new HttpError(404, "Message not found");
+	return new Response(object.body, {
+		headers: { "Content-Type": "text/plain; charset=utf-8", ...UNTRUSTED_CONTENT_HEADERS },
+	});
+});
+
+// Live updates: the mailbox Durable Object accepts the WebSocket and pushes MailboxEvents.
+mailbox.get("/events", async (c) => {
+	if (c.req.header("Upgrade")?.toLowerCase() !== "websocket") throw new HttpError(426, "Expected a WebSocket upgrade");
+	return mailboxStub(c).fetch(c.req.raw);
+});
 
 api.route("/mailboxes/:mailboxId", mailbox);

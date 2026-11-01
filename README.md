@@ -7,7 +7,7 @@ Self-hosted, Gmail-style webmail that runs entirely on your own Cloudflare accou
 - **Many users, many domains.** Admins add domains and mailboxes and grant people access. Each user switches between the mailboxes they're allowed to open.
 - **Sign-in** uses [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/). The Worker verifies every request's Access token itself and enforces per-mailbox permissions.
 
-> Status: **Phase 0 (foundation)**. Sign-in, the mailbox directory and the admin API work. Receiving, the Gmail-style UI and sending come in the next phases.
+> Status: **Phase 1 (receiving)**. Sign-in, the mailbox directory and the admin API work, and mail is received, threaded and readable over the API, with live updates. The Gmail-style UI (Phase 2) and sending come next.
 
 ## Stack
 
@@ -63,7 +63,26 @@ Checks: `pnpm test`, `pnpm run typecheck`, `pnpm run build`.
 | GET/POST/DELETE | `/api/admin/domains[/:domain]` | admin |
 | GET/POST/DELETE | `/api/admin/mailboxes[/:id]` | admin |
 | GET/PUT/DELETE | `/api/admin/mailboxes/:id/members[/:email]` | admin |
-| GET | `/api/mailboxes/:id/labels` | mailbox member |
+| GET | `/api/mailboxes/:id/labels` | mailbox member (with total/unread counts) |
+| GET | `/api/mailboxes/:id/threads?label=INBOX&cursor=&limit=` | mailbox member |
+| GET | `/api/mailboxes/:id/threads/:threadId` | mailbox member |
+| GET | `/api/mailboxes/:id/messages/:messageId/attachments/:attachmentId[?inline=1]` | mailbox member |
+| GET | `/api/mailboxes/:id/messages/:messageId/raw` | mailbox member ("Show original") |
+| GET (WebSocket) | `/api/mailboxes/:id/events` | mailbox member: pushes `threads.changed` |
+
+## How receiving works
+
+1. Email Routing calls the Worker's `email()` handler. Unknown recipients and messages over 25 MiB are rejected.
+2. The Worker parses the message with `postal-mime` and puts the raw `.eml`, the attachments and any HTML body over 256 KB into R2 under `mailboxes/<id>/messages/<messageId>/`.
+3. The mailbox Durable Object stores the message in one transaction. It skips duplicates (same Message-ID, since Email Routing may redeliver), finds the thread (by `In-Reply-To`/`References`, then by a reply arriving before its parent, then by a `Re:` subject within 30 days), labels it `INBOX` + `UNREAD`, and notifies connected browsers.
+4. If storing fails, the R2 uploads are removed and the error is rethrown, so the delivery fails instead of the message being silently dropped.
+
+To try it locally while `pnpm dev` runs, post a raw message to the local email endpoint:
+
+```bash
+curl -X POST "localhost:5173/cdn-cgi/handler/email?from=alice@sender.test&to=hello@example.com" \
+  --data-binary $'From: alice@sender.test\r\nTo: hello@example.com\r\nSubject: Hi\r\n\r\nHello!\r\n'
+```
 
 ## License
 
