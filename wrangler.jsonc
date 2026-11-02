@@ -20,7 +20,7 @@
 	//   ADMIN_EMAILS        comma-separated emails allowed to manage domains, mailboxes and members
 	//   ENCRYPTION_KEY      any long random string; encrypts users' AI provider keys
 
-	// Per-location request budgets (approximate; see README "Limits").
+	// Per-location request budgets (approximate; see docs/deploying.md "Limits").
 	"ratelimits": [
 		// Every signed-in API request, per user.
 		{ "name": "API_LIMITER", "namespace_id": "41001", "simple": { "limit": 600, "period": 60 } },
