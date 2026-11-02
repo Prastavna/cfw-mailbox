@@ -1,4 +1,4 @@
-import { EllipsisVertical, Pencil, Plus } from "lucide-react";
+import { BookUser, EllipsisVertical, Pencil, Plus } from "lucide-react";
 import { useState } from "react";
 import { NavLink, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
@@ -136,6 +136,8 @@ export function Sidebar({ mailboxId, labels, collapsed, actions, onNavigate, onC
 			{userLabels.map((l) =>
 				item(`/mail/${mailboxId}/${l.id}`, l.name, UserLabelIcon, l.unread, { color: l.color, menu: labelMenu(l) }),
 			)}
+
+			<div className={cn("mt-4 border-t pt-3", collapsed && "w-12")}>{item(`/mail/${mailboxId}/contacts`, "Contacts", BookUser, 0)}</div>
 
 			<LabelDialog
 				open={dialog !== null}

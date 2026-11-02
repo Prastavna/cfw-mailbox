@@ -216,7 +216,7 @@ export interface VacationSettings {
 	/** Optional window (ms since epoch); outside it no replies are sent. */
 	startAt: number | null;
 	endAt: number | null;
-	/** Only reply to people this mailbox has written to. */
+	/** Only reply to saved contacts and people this mailbox has written to. */
 	contactsOnly: boolean;
 }
 
@@ -333,3 +333,51 @@ export interface PushSubscriptionState {
 	mailboxIds: string[];
 }
 
+// ---- Address book ----------------------------------------------------------------------
+
+/** A saved contact. Each address belongs to at most one contact in a mailbox. */
+export interface SavedContact {
+	id: string;
+	name: string;
+	/** Lower-cased; the first is the one used when you email the contact. */
+	emails: string[];
+	phone: string;
+	company: string;
+	notes: string;
+	createdAt: number;
+	updatedAt: number;
+}
+
+export interface SavedContactInput {
+	name: string;
+	emails: string[];
+	phone?: string;
+	company?: string;
+	notes?: string;
+}
+
+/** Someone you've written to or heard from who isn't in your contacts. */
+export interface OtherContact {
+	name: string;
+	address: string;
+	sentCount: number;
+	receivedCount: number;
+	lastContacted: number;
+}
+
+export interface ImportContactsResult {
+	added: number;
+	/** Existing contacts (matched by email) that gained details. */
+	updated: number;
+	/** Cards without a usable email address, or over the limit. */
+	skipped: number;
+}
+
+export const ADDRESS_BOOK_LIMITS = {
+	contacts: 5000,
+	emailsPerContact: 10,
+	name: 200,
+	phone: 50,
+	company: 200,
+	notes: 2000,
+} as const;

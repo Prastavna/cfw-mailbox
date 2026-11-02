@@ -19,7 +19,7 @@ workers/
   auth/access.ts     Cloudflare Access JWT verification (+ local dev mode)
   registry/          RegistryDO: domains, mailboxes, members (one global instance)
   mailbox/           MailboxDO: one per mailbox; threads, messages, labels, drafts, outbox,
-                     search, snooze, contacts, filters, vacation replies, Trash purge
+                     search, snooze, contacts and address book, filters, vacation replies, Trash purge
   email/inbound.ts   Email Routing handler
   email/outbound.ts  Builds Email Service payloads; explains send errors
   extensions/ai/     AI Assistant: settings and encrypted keys, providers, prompts, routes

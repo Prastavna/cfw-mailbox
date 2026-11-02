@@ -1,4 +1,19 @@
-import { ArrowLeft, ChevronDown, ChevronUp, EllipsisVertical, FileCode, Forward, Paperclip, Pencil, Reply, ReplyAll, Star, Trash2 } from "lucide-react";
+import {
+	ArrowLeft,
+	ChevronDown,
+	ChevronUp,
+	EllipsisVertical,
+	FileCode,
+	Forward,
+	Paperclip,
+	Pencil,
+	Reply,
+	ReplyAll,
+	Star,
+	Trash2,
+	UserPen,
+	UserPlus,
+} from "lucide-react";
 import { toast } from "sonner";
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router";
@@ -36,6 +51,8 @@ import { AttachmentList } from "./AttachmentList";
 import { EmailBody } from "./EmailBody";
 import { SummarizeButton, SummaryCard, useThreadSummary } from "~/components/extensions/ai/ThreadSummary";
 import { useAiReady } from "~/lib/extensions";
+import { ContactDialog } from "~/components/contacts/ContactDialog";
+import { useContactFor } from "~/lib/address-book";
 
 interface ThreadViewProps {
 	mailboxId: string;
@@ -249,6 +266,9 @@ interface MessageCardProps {
 
 function MessageCard({ mailboxId, me, message, expanded, isLast, onToggle, onToggleStar, onReply, onForward }: MessageCardProps) {
 	const [showDetails, setShowDetails] = useState(false);
+	const [contactOpen, setContactOpen] = useState(false);
+	const contact = useContactFor(mailboxId, message.from.address);
+	const fromMe = message.from.address.toLowerCase() === me.toLowerCase();
 	const starred = message.labelIds.includes("STARRED");
 	const hasFiles = message.attachments.some((a) => a.disposition === "attachment");
 
@@ -328,8 +348,21 @@ function MessageCard({ mailboxId, me, message, expanded, isLast, onToggle, onTog
 										</a>
 									</DropdownMenuItem>
 								)}
+								{!fromMe && message.from.address && (
+									<DropdownMenuItem onSelect={() => setContactOpen(true)}>
+										{contact ? <UserPen className="size-4" /> : <UserPlus className="size-4" />}
+										{contact ? "Edit contact" : `Add ${message.from.name || message.from.address} to contacts`}
+									</DropdownMenuItem>
+								)}
 							</DropdownMenuContent>
 						</DropdownMenu>
+						<ContactDialog
+							mailboxId={mailboxId}
+							open={contactOpen}
+							onOpenChange={setContactOpen}
+							contact={contact}
+							seed={{ name: message.from.name, emails: [message.from.address] }}
+						/>
 					</div>
 
 					<button

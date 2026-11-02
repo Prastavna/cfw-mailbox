@@ -287,4 +287,27 @@ export const MAILBOX_MIGRATIONS: readonly Migration[] = [
 			WHERE json_valid(m."references") AND j.type = 'text' AND j.value != '';
 		`,
 	},
+	{
+		version: 7,
+		name: "address book",
+		sql: `
+			-- Contacts saved by hand or imported (the contacts table remembers everyone you correspond with).
+			CREATE TABLE address_book (
+				id TEXT PRIMARY KEY,
+				name TEXT NOT NULL DEFAULT '',
+				phone TEXT NOT NULL DEFAULT '',
+				company TEXT NOT NULL DEFAULT '',
+				notes TEXT NOT NULL DEFAULT '',
+				created_at INTEGER NOT NULL,
+				updated_at INTEGER NOT NULL
+			);
+			-- Each address belongs to at most one saved contact.
+			CREATE TABLE address_book_emails (
+				address TEXT PRIMARY KEY,
+				contact_id TEXT NOT NULL,
+				position INTEGER NOT NULL
+			) WITHOUT ROWID;
+			CREATE INDEX idx_address_book_emails_contact ON address_book_emails(contact_id, position);
+		`,
+	},
 ];

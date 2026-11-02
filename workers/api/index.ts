@@ -1,8 +1,12 @@
 import { type Context, Hono } from "hono";
 import { z } from "zod";
 import {
+	ADDRESS_BOOK_LIMITS,
 	type Contact,
 	type DraftDetail,
+	type ImportContactsResult,
+	type OtherContact,
+	type SavedContact,
 	type MailFilter,
 	type Label,
 	type MailboxRole,
@@ -22,6 +26,7 @@ import { exportMbox } from "../email/export";
 import { extensionRoutes, mailboxAiRoutes } from "../extensions/ai/routes";
 import { HttpError } from "../lib/http";
 import { type AppEnv, parseBody, rateLimit } from "./common";
+import { parseVCards, toVCards } from "../../shared/vcard";
 import { pushRoutes } from "./push";
 import { MAX_QUERY_LENGTH } from "../../shared/search";
 import { messageKeys } from "../mailbox/keys";
@@ -139,6 +144,22 @@ const FilterBody = z.object({
 const ContactsQuery = z.object({
 	q: z.string().max(200).default(""),
 	limit: z.coerce.number().int().min(1).max(20).default(8),
+});
+
+const SavedContactBody = z.object({
+	name: z.string().max(ADDRESS_BOOK_LIMITS.name).default(""),
+	emails: z.array(z.string().max(320)).max(ADDRESS_BOOK_LIMITS.emailsPerContact).default([]),
+	phone: z.string().max(ADDRESS_BOOK_LIMITS.phone).default(""),
+	company: z.string().max(ADDRESS_BOOK_LIMITS.company).default(""),
+	notes: z.string().max(ADDRESS_BOOK_LIMITS.notes).default(""),
+});
+const DeleteContactsBody = z.object({ contactIds: z.array(Id).min(1).max(ADDRESS_BOOK_LIMITS.contacts) });
+/** A .vcf file's text; the JSON body limit (1 MiB) caps it. */
+const ImportContactsBody = z.object({ vcf: z.string().min(1, "The file is empty") });
+const AddressBookQuery = z.object({ q: z.string().max(200).default("") });
+const OtherContactsQuery = z.object({
+	q: z.string().max(200).default(""),
+	limit: z.coerce.number().int().min(1).max(1000).default(200),
 });
 
 /** Uploads are read into memory; Email Service caps the whole message at 25 MiB anyway. */
@@ -356,6 +377,53 @@ mailbox.get("/contacts", async (c) => {
 	if (!q.success) throw new HttpError(400, q.error.issues.map((i) => i.message).join("; "));
 	const entry = await getRegistry(c.env).getMailbox(c.req.param("mailboxId")!);
 	return c.json<Contact[]>(await mailboxStub(c).listContacts(q.data.q, q.data.limit, entry ? [entry.address] : []));
+});
+
+// ---- Address book ----------------------------------------------------------------
+
+mailbox.get("/address-book", async (c) => {
+	const q = AddressBookQuery.safeParse(c.req.query());
+	if (!q.success) throw new HttpError(400, q.error.issues.map((i) => i.message).join("; "));
+	return c.json<SavedContact[]>(await mailboxStub(c).listSavedContacts(q.data.q));
+});
+mailbox.post("/address-book", async (c) => {
+	return c.json<SavedContact>(unwrap(await mailboxStub(c).createSavedContact(await parseBody(c.req.raw, SavedContactBody))), 201);
+});
+mailbox.put("/address-book/:contactId", async (c) => {
+	const body = await parseBody(c.req.raw, SavedContactBody);
+	return c.json<SavedContact>(unwrap(await mailboxStub(c).updateSavedContact(c.req.param("contactId"), body)));
+});
+mailbox.delete("/address-book/:contactId", async (c) => {
+	unwrap(await mailboxStub(c).deleteSavedContacts([c.req.param("contactId")]));
+	return c.body(null, 204);
+});
+mailbox.post("/address-book/delete", async (c) => {
+	const { contactIds } = await parseBody(c.req.raw, DeleteContactsBody);
+	return c.json(unwrap(await mailboxStub(c).deleteSavedContacts(contactIds)));
+});
+mailbox.post("/address-book/import", async (c) => {
+	await heavy(c);
+	const { vcf } = await parseBody(c.req.raw, ImportContactsBody);
+	const cards = parseVCards(vcf);
+	if (!cards.length) throw new HttpError(400, "No contacts found. Choose a .vcf (vCard) file.");
+	return c.json<ImportContactsResult>(await mailboxStub(c).importContacts(cards));
+});
+mailbox.get("/address-book.vcf", async (c) => {
+	const entry = await getRegistry(c.env).getMailbox(c.req.param("mailboxId")!);
+	const name = `${(entry?.address ?? "mailbox").replace(/[^a-z0-9@._-]/gi, "_")}-contacts.vcf`;
+	return new Response(toVCards(await mailboxStub(c).listSavedContacts()), {
+		headers: {
+			"Content-Type": "text/vcard; charset=utf-8",
+			"Content-Disposition": contentDisposition("attachment", name),
+			"Cache-Control": "no-store",
+		},
+	});
+});
+mailbox.get("/address-book/other", async (c) => {
+	const q = OtherContactsQuery.safeParse(c.req.query());
+	if (!q.success) throw new HttpError(400, q.error.issues.map((i) => i.message).join("; "));
+	const entry = await getRegistry(c.env).getMailbox(c.req.param("mailboxId")!);
+	return c.json<OtherContact[]>(await mailboxStub(c).listOtherContacts(q.data.q, q.data.limit, entry ? [entry.address] : []));
 });
 
 mailbox.get("/filters", async (c) => c.json<MailFilter[]>(await mailboxStub(c).listFilters()));

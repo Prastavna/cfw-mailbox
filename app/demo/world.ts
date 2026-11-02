@@ -223,6 +223,9 @@ export class DemoWorld {
 				else store.recordContacts([from], "received", at);
 			});
 		});
+		// A few of the people you write to most, saved as contacts.
+		const regulars = [...store.contacts.values()].filter((c) => c.sent > 0 && c.name).slice(0, 4);
+		for (const c of regulars) store.saveContact(null, { name: c.name, emails: [c.address] });
 	}
 }
 

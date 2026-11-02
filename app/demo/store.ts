@@ -1,5 +1,10 @@
 import {
+	ADDRESS_BOOK_LIMITS,
 	ALL_MAIL,
+	type ImportContactsResult,
+	type OtherContact,
+	type SavedContact,
+	type SavedContactInput,
 	type AttachmentInfo,
 	type Contact,
 	type CreateDraftRequest,
@@ -26,6 +31,8 @@ import {
 import { parseSearch, type SearchQuery, type SearchTerm } from "../../shared/search";
 import { htmlToText, makeSnippet, normalizeSubject } from "../../workers/email/parse";
 import { dataUrlSize } from "./files";
+import { isValidAddress, normalizeAddress } from "../../shared/address";
+import type { VCardContact } from "../../shared/vcard";
 
 /**
  * One demo mailbox, in memory. Follows MailboxDO's rules (labels on messages,
@@ -90,6 +97,7 @@ export class DemoMailbox {
 	threads = new Map<string, StoredThread>();
 	filters: MailFilter[] = [];
 	contacts = new Map<string, { name: string; address: string; sent: number; received: number; last: number }>();
+	savedContacts: SavedContact[] = [];
 	settings: MailboxSettings = { signature: "", undoSendSeconds: 5, vacation: DEFAULT_VACATION };
 	private listeners = new Set<(e: MailboxEvent) => void>();
 	private sendTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -491,11 +499,93 @@ export class DemoMailbox {
 
 	listContacts(query: string, limit: number): Contact[] {
 		const q = query.trim().toLowerCase();
-		return [...this.contacts.values()]
-			.filter((c) => !q || c.address.startsWith(q) || c.address.includes(`@${q}`) || c.name.toLowerCase().startsWith(q) || c.name.toLowerCase().includes(` ${q}`))
+		const matches = (name: string, address: string) =>
+			!q || address.startsWith(q) || address.includes(`@${q}`) || name.toLowerCase().startsWith(q) || name.toLowerCase().includes(` ${q}`);
+		const saved = this.savedContacts.flatMap((c) => c.emails.filter((e) => matches(c.name, e)).map((address) => ({ name: c.name, address })));
+		const savedSet = new Set(this.savedContacts.flatMap((c) => c.emails));
+		const others = [...this.contacts.values()]
+			.filter((c) => !savedSet.has(c.address) && matches(c.name, c.address))
 			.sort((a, b) => b.sent - a.sent || b.received - a.received || b.last - a.last)
-			.slice(0, limit)
 			.map(({ name, address }) => ({ name, address }));
+		return [...saved, ...others].slice(0, limit);
+	}
+
+	// ---- Address book (same rules as workers/mailbox/address-book.ts) -----------------
+
+	listSavedContacts(): SavedContact[] {
+		return [...this.savedContacts].sort((a, b) => (!a.name ? 1 : 0) - (!b.name ? 1 : 0) || a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+	}
+
+	listOtherContacts(): OtherContact[] {
+		const saved = new Set(this.savedContacts.flatMap((c) => c.emails));
+		return [...this.contacts.values()]
+			.filter((c) => !saved.has(c.address))
+			.sort((a, b) => b.last - a.last)
+			.map((c) => ({ name: c.name, address: c.address, sentCount: c.sent, receivedCount: c.received, lastContacted: c.last }));
+	}
+
+	saveContact(id: string | null, input: SavedContactInput): SavedContact {
+		const emails = [...new Set(input.emails.map(normalizeAddress).filter(Boolean))];
+		const bad = emails.find((e) => !isValidAddress(e));
+		if (bad) throw new HttpError(400, `"${bad}" isn't a valid email address`);
+		if (!input.name.trim() && !emails.length) throw new HttpError(400, "Give the contact a name or an email address");
+		const taken = this.savedContacts.find((c) => c.id !== id && c.emails.some((e) => emails.includes(e)));
+		if (taken) {
+			const address = taken.emails.find((e) => emails.includes(e))!;
+			throw new HttpError(409, `${address} is already saved${taken.name ? ` as ${taken.name}` : ""}`);
+		}
+		const now = Date.now();
+		const fields = {
+			name: input.name.trim(),
+			emails: emails.slice(0, ADDRESS_BOOK_LIMITS.emailsPerContact),
+			phone: (input.phone ?? "").trim(),
+			company: (input.company ?? "").trim(),
+			notes: (input.notes ?? "").trim(),
+		};
+		if (id) {
+			const existing = this.savedContacts.find((c) => c.id === id);
+			if (!existing) throw new HttpError(404, "Contact not found");
+			Object.assign(existing, fields, { updatedAt: now });
+			return existing;
+		}
+		const contact: SavedContact = { id: crypto.randomUUID(), ...fields, createdAt: now, updatedAt: now };
+		this.savedContacts.push(contact);
+		return contact;
+	}
+
+	deleteContacts(ids: string[]): { deleted: number } {
+		const before = this.savedContacts.length;
+		this.savedContacts = this.savedContacts.filter((c) => !ids.includes(c.id));
+		if (before === this.savedContacts.length) throw new HttpError(404, "Contact not found");
+		return { deleted: before - this.savedContacts.length };
+	}
+
+	importContacts(cards: VCardContact[]): ImportContactsResult {
+		const result: ImportContactsResult = { added: 0, updated: 0, skipped: 0 };
+		for (const card of cards) {
+			const emails = card.emails.map(normalizeAddress).filter(isValidAddress);
+			if (!emails.length) {
+				result.skipped++;
+				continue;
+			}
+			const existing = this.savedContacts.find((c) => c.emails.some((e) => emails.includes(e)));
+			if (!existing) {
+				this.saveContact(null, { ...card, emails });
+				result.added++;
+				continue;
+			}
+			const free = emails.filter((e) => !existing.emails.includes(e) && !this.savedContacts.some((c) => c.emails.includes(e)));
+			const before = JSON.stringify(existing);
+			Object.assign(existing, {
+				name: existing.name || card.name,
+				emails: [...existing.emails, ...free],
+				phone: existing.phone || card.phone,
+				company: existing.company || card.company,
+				notes: existing.notes || card.notes,
+			});
+			if (JSON.stringify(existing) !== before) result.updated++;
+		}
+		return result;
 	}
 
 	// ---- Filters ---------------------------------------------------------------------------

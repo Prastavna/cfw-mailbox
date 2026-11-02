@@ -23,7 +23,13 @@
 | GET | `/api/mailboxes/:id/export.mbox` | mailbox member (download everything) |
 | POST | `/api/mailboxes/:id/threads/snooze` `{threadIds, until}` | mailbox member (`until` in ms, in the future) |
 | POST | `/api/mailboxes/:id/threads/unsnooze` `{threadIds}` | mailbox member |
-| GET | `/api/mailboxes/:id/contacts?q=pri&limit=8` | mailbox member (recipient suggestions) |
+| GET | `/api/mailboxes/:id/contacts?q=pri&limit=8` | mailbox member (recipient suggestions: saved contacts, then your mail history) |
+| GET/POST | `/api/mailboxes/:id/address-book[?q=]` `{name, emails, phone?, company?, notes?}` | mailbox member (saved contacts) |
+| PUT/DELETE | `/api/mailboxes/:id/address-book/:contactId` | mailbox member |
+| POST | `/api/mailboxes/:id/address-book/delete` `{contactIds}` | mailbox member |
+| GET | `/api/mailboxes/:id/address-book/other?q=&limit=` | mailbox member (people from your mail who aren't saved) |
+| POST | `/api/mailboxes/:id/address-book/import` `{vcf}` | mailbox member (vCard text; merges by email address) |
+| GET | `/api/mailboxes/:id/address-book.vcf` | mailbox member (export as vCard 3.0) |
 | GET/POST | `/api/mailboxes/:id/filters` `{query, actions, applyToExisting?}` | mailbox member |
 | DELETE | `/api/mailboxes/:id/filters/:filterId` | mailbox member |
 | POST | `/api/mailboxes/:id/drafts` `{to, cc, bcc, subject, html, parent?: {messageId, kind: "reply"\|"forward"}}` | mailbox member |

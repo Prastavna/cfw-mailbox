@@ -213,7 +213,7 @@ export function SettingsDialog({ mailboxId, address, labels, open, onOpenChange,
 										</div>
 										<label className="flex items-center gap-2 text-sm">
 											<Checkbox checked={vacation.contactsOnly} onCheckedChange={(c) => setVac("contactsOnly", c === true)} />
-											Only send a response to people I've written to
+											Only send a response to my contacts and people I've written to
 										</label>
 										{vacationError && (
 											<p role="alert" className="text-sm text-destructive">

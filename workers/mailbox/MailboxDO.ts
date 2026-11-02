@@ -5,6 +5,10 @@ import {
 	SEND_LIMITS,
 	type Contact,
 	type CreateDraftRequest,
+	type ImportContactsResult,
+	type OtherContact,
+	type SavedContact,
+	type SavedContactInput,
 	DEFAULT_VACATION,
 	type FilterActions,
 	type MailFilter,
@@ -36,6 +40,8 @@ import { messageKeys, TEXT_LIMIT } from "./keys";
 import { parseSearch } from "../../shared/search";
 import { MAILBOX_MIGRATIONS, SystemLabel } from "./schema";
 import { compileSearch } from "./search";
+import * as addressBook from "./address-book";
+import type { VCardContact } from "../../shared/vcard";
 
 /** Everything needed to store one message. Blobs are already in R2. */
 export interface IngestInput {
@@ -1543,25 +1549,36 @@ export class MailboxDO extends DurableObject<Env> {
 		}
 	}
 
-	/**
-	 * Address suggestions: names or addresses starting with `query` (or a
-	 * domain starting with it), people you've written to first.
-	 */
+	/** Recipient suggestions: saved contacts first, then people you write to most. */
 	async listContacts(query: string, limit: number, exclude: string[] = []): Promise<Contact[]> {
-		const q = query.trim().toLowerCase().replace(/[\\%_]/g, (c) => `\\${c}`);
-		return this.sql
-			.exec<{ name: string; address: string }>(
-				`SELECT name, address FROM contacts
-				 WHERE (?1 = '' OR address LIKE ?1 || '%' ESCAPE '\\' OR address LIKE '%@' || ?1 || '%' ESCAPE '\\'
-				        OR lower(name) LIKE ?1 || '%' ESCAPE '\\' OR lower(name) LIKE '% ' || ?1 || '%' ESCAPE '\\')
-				   AND address NOT IN (SELECT value FROM json_each(?2))
-				 ORDER BY sent_count DESC, received_count DESC, last_contacted DESC
-				 LIMIT ?3`,
-				q,
-				JSON.stringify(exclude),
-				limit,
-			)
-			.toArray();
+		return addressBook.suggest(this.sql, query, limit, exclude);
+	}
+
+	// ---- Address book --------------------------------------------------------------
+
+	async listSavedContacts(query = ""): Promise<SavedContact[]> {
+		return addressBook.listSaved(this.sql, query);
+	}
+
+	async listOtherContacts(query: string, limit: number, exclude: string[]): Promise<OtherContact[]> {
+		return addressBook.listOther(this.sql, query, limit, exclude);
+	}
+
+	async createSavedContact(input: SavedContactInput): Promise<Result<SavedContact>> {
+		return this.ctx.storage.transactionSync(() => addressBook.createSaved(this.sql, input));
+	}
+
+	async updateSavedContact(id: string, input: SavedContactInput): Promise<Result<SavedContact>> {
+		return this.ctx.storage.transactionSync(() => addressBook.updateSaved(this.sql, id, input));
+	}
+
+	async deleteSavedContacts(ids: string[]): Promise<Result<{ deleted: number }>> {
+		const deleted = this.ctx.storage.transactionSync(() => addressBook.deleteSaved(this.sql, ids));
+		return deleted ? ok({ deleted }) : fail("not_found", "Contact not found");
+	}
+
+	async importContacts(cards: VCardContact[]): Promise<ImportContactsResult> {
+		return this.ctx.storage.transactionSync(() => addressBook.importCards(this.sql, cards));
 	}
 
 	// ---- Filters ---------------------------------------------------------------------
@@ -1688,7 +1705,7 @@ export class MailboxDO extends DurableObject<Env> {
 			if (labels.includes(SystemLabel.SPAM) || labels.includes(SystemLabel.TRASH)) return "skipped";
 			if (vacation.contactsOnly) {
 				const known = this.sql.exec<{ n: number }>("SELECT sent_count AS n FROM contacts WHERE address = ?", sender).toArray()[0];
-				if (!known?.n) return "skipped";
+				if (!known?.n && !addressBook.isSaved(this.sql, sender)) return "skipped";
 			}
 			const last = this.sql.exec<{ sent_at: number }>("SELECT sent_at FROM vacation_replies WHERE address = ?", sender).toArray()[0];
 			if (last && now - last.sent_at < VACATION_INTERVAL_MS) return "skipped";

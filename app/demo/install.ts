@@ -1,5 +1,6 @@
 import type { MailboxEvent } from "../../shared/api";
 import { API_BASE, setFileUrlResolver } from "~/lib/api";
+import { toVCards } from "../../shared/vcard";
 import { createDemoServer } from "./server";
 import type { DemoMailbox, StoredMessage } from "./store";
 import { DemoWorld } from "./world";
@@ -78,6 +79,8 @@ class DemoSocket {
 const rawUrls = new Map<string, string>();
 let exportUrl: string | null = null;
 
+let vcardUrl: string | null = null;
+
 function fileUrl(world: DemoWorld, path: string): string {
 	const [route] = path.split("?");
 	const parts = route!.split("/").filter(Boolean); // mailboxes, :id, …
@@ -93,6 +96,12 @@ function fileUrl(world: DemoWorld, path: string): string {
 			.join("\n");
 		exportUrl = URL.createObjectURL(new Blob([mbox], { type: "application/mbox" }));
 		return exportUrl;
+	}
+
+	if (parts[2] === "address-book.vcf") {
+		if (vcardUrl) URL.revokeObjectURL(vcardUrl);
+		vcardUrl = URL.createObjectURL(new Blob([toVCards(box.listSavedContacts())], { type: "text/vcard" }));
+		return vcardUrl;
 	}
 
 	const message = box.messages.get(parts[3] ?? "");

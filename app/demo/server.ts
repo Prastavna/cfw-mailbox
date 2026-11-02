@@ -3,6 +3,7 @@ import type { Me } from "../../shared/api";
 import { EXTENSIONS, type ExtensionInfo } from "../../shared/extensions";
 import * as ai from "./ai";
 import { blobToDataUrl } from "./files";
+import { parseVCards } from "../../shared/vcard";
 import { HttpError } from "./store";
 import type { DemoWorld } from "./world";
 
@@ -88,6 +89,16 @@ export function createDemoServer(world: DemoWorld) {
 	});
 	on("POST", "/mailboxes/:id/threads/unsnooze", async ({ params, body }) => mb(params[0]).unsnoozeThreads((await body()).threadIds));
 	on("GET", "/mailboxes/:id/contacts", ({ params, url }) => mb(params[0]).listContacts(url.searchParams.get("q") ?? "", Number(url.searchParams.get("limit") ?? 8)));
+	on("GET", "/mailboxes/:id/address-book", ({ params }) => mb(params[0]).listSavedContacts());
+	on("GET", "/mailboxes/:id/address-book/other", ({ params }) => mb(params[0]).listOtherContacts());
+	on("POST", "/mailboxes/:id/address-book", async ({ params, body }) => mb(params[0]).saveContact(null, await body()), 201);
+	on("PUT", "/mailboxes/:id/address-book/:contact", async ({ params, body }) => mb(params[0]).saveContact(params[1]!, await body()));
+	on("POST", "/mailboxes/:id/address-book/delete", async ({ params, body }) => mb(params[0]).deleteContacts((await body()).contactIds));
+	on("POST", "/mailboxes/:id/address-book/import", async ({ params, body }) => {
+		const cards = parseVCards((await body()).vcf);
+		if (!cards.length) throw new HttpError(400, "No contacts found. Choose a .vcf (vCard) file.");
+		return mb(params[0]).importContacts(cards);
+	});
 	on("GET", "/mailboxes/:id/filters", ({ params }) => mb(params[0]).filters);
 	on("POST", "/mailboxes/:id/filters", async ({ params, body }) => {
 		const b = await body();
