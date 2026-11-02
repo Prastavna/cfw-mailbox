@@ -24,6 +24,8 @@ export default defineConfig(({ command }) => ({
 				viteEnvironment: { name: "ssr" },
 				// The end-to-end tests run against their own, throwaway local state.
 				persistState: process.env.E2E ? { path: ".wrangler/e2e-state" } : true,
+				// …and need nothing remote (their AI provider is a local fake), so they run without a Cloudflare login.
+				remoteBindings: !process.env.E2E,
 				config: command === "serve" ? (config) => ({ vars: { ...config.vars, ...DEV_VARS } }) : undefined,
 			}),
 		tailwindcss(),

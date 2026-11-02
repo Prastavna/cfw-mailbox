@@ -39,5 +39,10 @@
 | POST | `/api/mailboxes/:id/ai/summarize` `{threadId}` | mailbox member, AI on (streams plain text) |
 | POST | `/api/mailboxes/:id/ai/write` `{instructions, parentMessageId?, subject?, to?, current?}` | mailbox member, AI on (streams plain text) |
 | POST | `/api/mailboxes/:id/ai/chat` `{messages, tz}` | mailbox member, AI on (AI SDK UI message stream) |
+| GET | `/api/push` | signed in (the VAPID public key browsers subscribe with) |
+| GET | `/api/push/subscription?endpoint=` | signed in (which mailboxes notify this browser) |
+| PUT | `/api/push/subscription` `{subscription, mailboxIds, replaces?}` | signed in (empty `mailboxIds` turns it off; only mailboxes you can open are kept) |
+| POST | `/api/push/subscription/remove` `{endpoint}` | signed in |
+| POST | `/api/push/test` `{endpoint}` | signed in (sends a sample notification) |
 
 `threads?label=` takes a label ID or `ALL` (All Mail). Threads in Trash or Spam are hidden from every other view and from the counts.

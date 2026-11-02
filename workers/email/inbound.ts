@@ -2,6 +2,7 @@ import { normalizeAddress } from "../../shared/address";
 import { INLINE_HTML_LIMIT, messageKeys, TEXT_LIMIT } from "../mailbox/keys";
 import { getMailbox, type IngestInput } from "../mailbox/MailboxDO";
 import { SystemLabel } from "../mailbox/schema";
+import { notifyNewMail } from "../push/notify";
 import { getRegistry } from "../registry/RegistryDO";
 import { htmlToText, parseMessage, type ParsedMessage } from "./parse";
 
@@ -21,7 +22,7 @@ export type InboundMessage = Pick<ForwardableEmailMessage, "from" | "to" | "raw"
  * recipient, parse, put blobs in R2, then file the message in the mailbox.
  * Throwing makes Email Routing report a temporary failure so the sender retries.
  */
-export async function handleInbound(message: InboundMessage, env: Env): Promise<void> {
+export async function handleInbound(message: InboundMessage, env: Env, ctx?: Pick<ExecutionContext, "waitUntil">): Promise<void> {
 	if (message.rawSize > MAX_INBOUND_BYTES) {
 		message.setReject("Message too large");
 		return;
@@ -101,6 +102,17 @@ export async function handleInbound(message: InboundMessage, env: Env): Promise<
 				automated: parsed.automated,
 			})
 			.catch((err) => console.warn("Vacation reply failed", String(err)));
+		if (result.notify) {
+			const notified = notifyNewMail(env, mailboxEntry, {
+				threadId: result.threadId,
+				from: input.from,
+				subject: parsed.subject,
+				snippet: result.notify.snippet,
+			});
+			// Don't hold up delivery for push services; tests (no ctx) wait for it.
+			if (ctx) ctx.waitUntil(notified);
+			else await notified;
+		}
 	} catch (err) {
 		await env.BUCKET.delete(uploaded).catch(() => {});
 		throw err;

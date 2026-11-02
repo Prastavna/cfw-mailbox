@@ -28,6 +28,8 @@
 | JSON request body | 1 MiB (a draft's HTML is capped at 300 KB) |
 | Mailbox database | about 9 GiB of the Durable Object's 10 GB; past that, new mail is bounced with "Mailbox is full" |
 
+New-mail notifications need no setup: the Worker makes its own VAPID keys and calls the browsers' push services (Google, Mozilla, Apple, Microsoft) directly. If Cloudflare Access protects the app, keep `/sw.js` and `/manifest.webmanifest` behind it like the rest; the browser fetches both with the Access cookie.
+
 Request budgets use the [Workers rate limiting binding](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/): they're counted per Cloudflare location and approximate, a guard against runaway scripts rather than a quota. Change them under `ratelimits` in `wrangler.jsonc`. Attachments and raw messages live in R2 and don't count towards the database size; Settings → General shows both.
 
 ## Backups and export

@@ -7,6 +7,7 @@ import { ComposeDock } from "~/components/mail/compose/ComposeWindow";
 import { Header } from "~/components/mail/Header";
 import { SettingsDialog, type SettingsTab } from "~/components/mail/SettingsDialog";
 import { ShortcutsHelp } from "~/components/mail/ShortcutsHelp";
+import { OfflineBanner } from "~/components/mail/OfflineBanner";
 import { VacationBanner } from "~/components/mail/VacationBanner";
 import { Sidebar } from "~/components/mail/Sidebar";
 import { Button } from "~/components/ui/button";
@@ -18,6 +19,7 @@ import { useMailActions } from "~/lib/actions";
 import { rememberMailbox, useLabels, useMailboxEvents, useMe } from "~/lib/api";
 import { useComposer } from "~/lib/compose-store";
 import { useAiReady } from "~/lib/extensions";
+import { useOfflineSync } from "~/lib/pwa";
 import type { MailboxContext } from "~/lib/mailbox-context";
 import { useShortcuts } from "~/lib/shortcuts";
 import { cn } from "~/lib/utils";
@@ -31,7 +33,16 @@ export default function MailboxLayout() {
 	const mailbox = me?.mailboxes.find((m) => m.id === mailboxId);
 
 	if (isPending) return <div className="min-h-svh bg-mail-canvas" aria-busy />;
-	if (error) return <FullPageMessage>Couldn't sign you in: {error.message}</FullPageMessage>;
+	if (error) {
+		if (typeof navigator !== "undefined" && !navigator.onLine) {
+			return (
+				<FullPageMessage>
+					You're offline. To read mail without a connection, turn on Offline mail in Settings → This device next time you're online.
+				</FullPageMessage>
+			);
+		}
+		return <FullPageMessage>Couldn't sign you in: {error.message}</FullPageMessage>;
+	}
 	if (!mailbox) {
 		return (
 			<FullPageMessage>
@@ -50,6 +61,7 @@ function MailboxFrame({ me, mailbox }: { me: Me; mailbox: MailboxAccess }) {
 	const actions = useMailActions(mailbox.id);
 	const composer = useComposer(mailbox);
 	const live = useMailboxEvents(mailbox.id, composer);
+	useOfflineSync(mailbox.id, live);
 	const desktop = useMediaQuery("(min-width: 768px)");
 	const [collapsed, setCollapsed] = useState(false);
 	const [mobileOpen, setMobileOpen] = useState(false);
@@ -97,7 +109,7 @@ function MailboxFrame({ me, mailbox }: { me: Me; mailbox: MailboxAccess }) {
 
 	return (
 		<TooltipProvider delayDuration={400}>
-			<div className="flex h-svh flex-col bg-mail-canvas text-foreground">
+			<div className="safe-area flex h-svh flex-col bg-mail-canvas text-foreground">
 				<Header
 					me={me}
 					mailbox={mailbox}
@@ -108,6 +120,7 @@ function MailboxFrame({ me, mailbox }: { me: Me; mailbox: MailboxAccess }) {
 					onOpenExtension={() => setAiSettingsOpen(true)}
 					onAsk={aiReady ? () => setAskOpen(true) : undefined}
 				/>
+				<OfflineBanner onOpenSettings={() => openSettings("device")} />
 				<VacationBanner mailboxId={mailbox.id} onOpenSettings={() => openSettings("vacation")} />
 				<div className="flex min-h-0 flex-1">
 					<aside className={cn("hidden shrink-0 overflow-y-auto md:block", collapsed ? "w-[72px]" : "w-64")}>
@@ -135,7 +148,7 @@ function MailboxFrame({ me, mailbox }: { me: Me; mailbox: MailboxAccess }) {
 				</div>
 				{/* Phones have no sidebar on screen; Compose floats over the list, as in Gmail's app. */}
 				<Button
-					className="fixed right-4 bottom-5 z-20 h-14 rounded-2xl bg-mail-compose px-5 text-mail-active-foreground shadow-lg hover:bg-mail-compose/90 md:hidden"
+					className="fixed right-[calc(1rem+env(safe-area-inset-right))] bottom-[calc(1.25rem+env(safe-area-inset-bottom))] z-20 h-14 rounded-2xl bg-mail-compose px-5 text-mail-active-foreground shadow-lg hover:bg-mail-compose/90 md:hidden"
 					onClick={() => composer.compose()}
 				>
 					<Pencil aria-hidden /> Compose

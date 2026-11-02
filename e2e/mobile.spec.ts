@@ -35,3 +35,20 @@ test("phone layout: list, conversation, folders, compose and settings", async ({
 	await expect(page.getByRole("dialog", { name: "New Message" })).toBeVisible();
 	await expectNoSideScroll(page);
 });
+
+test("swipe a conversation to archive it", async ({ page, request, mailbox }) => {
+	await deliver(request, mailbox, { subject: "Swipe me away", text: "Body" });
+	await deliver(request, mailbox, { subject: "Keep me", text: "Body" });
+	await openMailbox(page, mailbox);
+	const target = row(page, "Swipe me away").locator("[class*=touch-pan-y]");
+	const box = (await target.boundingBox())!;
+	const y = box.y + box.height / 2;
+	const at = (x: number) => ({ pointerType: "touch", pointerId: 7, isPrimary: true, clientX: x, clientY: y, bubbles: true });
+	await target.dispatchEvent("pointerdown", at(box.x + box.width - 20));
+	for (const x of [box.width - 40, box.width - 120, box.width - 220, 30]) await target.dispatchEvent("pointermove", at(box.x + x));
+	await target.dispatchEvent("pointerup", at(box.x + 30));
+
+	await expect(page.locator("[data-sonner-toast]").filter({ hasText: "Conversation archived." })).toBeVisible();
+	await expect(row(page, "Swipe me away")).toBeHidden();
+	await expect(row(page, "Keep me")).toBeVisible();
+});

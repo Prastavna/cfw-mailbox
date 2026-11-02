@@ -2,6 +2,7 @@ import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-quer
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import type { ApiError, Label, MailboxEvent, Me, ThreadDetail, ThreadPage } from "../../shared/api";
+import { noteResponseSource } from "./connection";
 
 export class ApiRequestError extends Error {
 	constructor(
@@ -32,6 +33,7 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
 		...init,
 		headers: { ...(init?.body ? { "content-type": "application/json" } : {}), ...init?.headers },
 	});
+	if (!init?.method || init.method === "GET") noteResponseSource(res);
 	if (!res.ok) {
 		const body = (await res.json().catch(() => null)) as ApiError | null;
 		throw new ApiRequestError(res.status, body?.error ?? res.statusText);

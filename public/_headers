@@ -8,3 +8,10 @@
 # Fingerprinted build output never changes.
 /assets/*
   Cache-Control: public, max-age=31536000, immutable
+
+# The service worker and manifest must always be revalidated, so updates reach browsers.
+/sw.js
+  Cache-Control: no-cache
+/manifest.webmanifest
+  Content-Type: application/manifest+json
+  Cache-Control: no-cache

@@ -22,6 +22,7 @@ import { exportMbox } from "../email/export";
 import { extensionRoutes, mailboxAiRoutes } from "../extensions/ai/routes";
 import { HttpError } from "../lib/http";
 import { type AppEnv, parseBody, rateLimit } from "./common";
+import { pushRoutes } from "./push";
 import { MAX_QUERY_LENGTH } from "../../shared/search";
 import { messageKeys } from "../mailbox/keys";
 import { getMailbox } from "../mailbox/MailboxDO";
@@ -251,6 +252,10 @@ api.route("/admin", admin);
 // ---- Extensions (each user's own; off until they turn them on) ------------------
 
 api.route("/extensions", extensionRoutes);
+
+// ---- Notifications (each user's own browsers) ---------------------------------------
+
+api.route("/push", pushRoutes);
 
 // ---- Per-mailbox routes ---------------------------------------------------
 

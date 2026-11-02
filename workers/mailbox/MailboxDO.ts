@@ -63,7 +63,8 @@ export interface IngestInput {
 }
 
 export type IngestResult =
-	| { status: "stored"; threadId: string; merged?: string[] }
+	/** `notify`: the message is still unread in the Inbox after filters, so browsers should hear about it. */
+	| { status: "stored"; threadId: string; merged?: string[]; notify?: { snippet: string } }
 	| { status: "duplicate"; threadId: string }
 	| { status: "full" };
 
@@ -294,7 +295,15 @@ export class MailboxDO extends DurableObject<Env> {
 				this.recordContacts([input.from], "received", input.receivedAt);
 			}
 			this.recomputeThread(threadId);
-			return { status: "stored", threadId, merged: strays };
+			const row = this.sql
+				.exec<{ snippet: string; inbox: number }>(
+					`SELECT snippet, (SELECT COUNT(*) FROM message_labels WHERE message_id = ?1 AND label_id IN ('INBOX', 'UNREAD')) = 2
+					   AND NOT EXISTS (SELECT 1 FROM message_labels WHERE message_id = ?1 AND label_id IN ('SPAM', 'TRASH')) AS inbox
+					 FROM messages WHERE id = ?1`,
+					input.id,
+				)
+				.toArray()[0];
+			return { status: "stored", threadId, merged: strays, notify: row?.inbox ? { snippet: row.snippet } : undefined };
 		});
 
 		if (result.status === "stored") {

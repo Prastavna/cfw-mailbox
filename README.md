@@ -17,6 +17,7 @@ Self-hosted, Gmail-style webmail that runs entirely on your own Cloudflare accou
 - Gmail-style compose: rich text, attachments, auto-saved drafts, signature, undo send
 - Search with Gmail's operators, snooze, filters, vacation responder, contact suggestions, keyboard shortcuts
 - Trash and Spam empty themselves after 30 days; download any mailbox as mbox
+- Installable app with new-mail notifications, offline reading and swipe actions on phones
 - Admin page at `/admin` for domains, mailboxes and members
 - Optional **AI Assistant** (bring your own key): summarise, draft replies, rewrite, ask your inbox
 
@@ -33,7 +34,7 @@ This signs you in as `dev@example.com` (an admin) on `localhost`. Open <http://l
 
 - [Deploying](docs/deploying.md): setup, limits, backups
 - [Development](docs/development.md): code layout, local dev, tests, the demo
-- [Using the mailbox](docs/using.md): actions, search operators, snooze, filters, shortcuts
+- [Using the mailbox](docs/using.md): actions, search operators, snooze, filters, the installed app, shortcuts
 - [How it works](docs/architecture.md): receiving, sending, safe rendering, security
 - [AI Assistant](docs/ai-assistant.md): the extension and its providers
 - [API](docs/api.md): HTTP endpoints

@@ -30,6 +30,15 @@ The search box has an options panel that builds these for you.
 - **Contacts** come from the people you send to and the people who write to you; the To/Cc/Bcc boxes suggest them, people you've written to first.
 - **Trash and Spam** are emptied automatically: a message is deleted for good, with its files in R2, 30 days after it was moved there.
 
+## On your phone and desktop
+
+Mail is an installable web app. Chrome and Edge offer **Install** in the address bar (or Settings → This device → **Install**); on iPhone and iPad use Share → **Add to Home Screen**. Installed, it opens in its own window, and on phones you can swipe a conversation sideways to archive it (or, outside the Inbox, to delete it).
+
+Settings → **This device** holds settings that are yours alone and only apply to the browser you're in:
+
+- **New mail notifications** for this mailbox, even when Mail is closed. You're notified about messages that land unread in the Inbox, not ones a filter archives, deletes or marks as read. Use **Send a test notification** to check it works. On iPhone and iPad, notifications only work in the installed app (iOS 16.4 or later).
+- **Offline mail** keeps your newest 50 Inbox conversations, and everything you open, on this device, so you can read them without a connection. It refreshes every few minutes while you're online. Turning it off deletes what was saved, and signing in as someone else in the same browser starts afresh. Don't use it on a shared computer. Writing and other changes still need a connection.
+
 ### Keyboard shortcuts
 
 On by default (turn them off in the `?` dialog; the choice is saved in the browser). They're ignored while you're typing or a menu or dialog is open.

@@ -23,6 +23,12 @@ curl -X POST "localhost:5173/cdn-cgi/handler/email?from=alice@sender.test&to=hel
 
 Limits follow Email Service: 50 recipients, 32 attachments and 25 MB per message.
 
+## Notifications and offline mail
+
+**Push.** Each install makes its own VAPID key pair the first time someone turns notifications on and keeps it in the registry Durable Object, so there's nothing to configure. A browser's subscription is stored with the mailboxes it wants to hear about. When a message is stored still unread in the Inbox (after filters), the Worker encrypts a small payload (sender, subject, a line of text) for each subscribed browser with the `aes128gcm` Web Push encoding and sends it to that browser's push service. Only that browser can read it. Whether the user may still open the mailbox is checked again before every notification. Subscriptions the push service reports as gone are deleted. The Worker only delivers to the major push services (Google, Mozilla, Apple, Microsoft), so a made-up endpoint can't make it call arbitrary URLs.
+
+**Service worker** (`public/sw.js`). It keeps the app's code and pages so Mail opens without a connection, and shows notifications (a click opens the conversation). With **Offline mail** on, it also keeps the answers to the API reads that matter for reading (you, labels, settings, folder lists, conversations, inline images): fresh from the network when online, the saved copy when not, marked so the app can say it's showing saved mail. The app keeps the newest Inbox conversations saved in the background. Saved mail is tied to the signed-in user: a different account in the same browser wipes it first.
+
 ## Reading mail safely
 
 HTML mail is sanitised with DOMPurify, which strips scripts, event handlers, forms and embeds. It is then rendered in an iframe with no script permission. A Content Security Policy inside that iframe blocks remote images, CSS backgrounds and fonts until the user clicks **Display images**, so senders can't track opens. `cid:` images are served from the message's own attachments, and links open in a new tab without a referrer.
@@ -32,4 +38,5 @@ HTML mail is sanitised with DOMPurify, which strips scripts, event handlers, for
 - **Sign-in:** every API request must carry a valid Cloudflare Access token for this application, checked by the Worker itself; mailbox access is then checked per mailbox, and unknown or forbidden mailboxes answer 404.
 - **Cross-site requests:** state-changing requests must be JSON (which forces a CORS preflight) and come from the app's own origin; WebSocket upgrades must too.
 - **Pages** are sent with a per-request nonce Content Security Policy (no inline scripts without the nonce, no framing, no plugins) and `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`, `Permissions-Policy` and, over HTTPS, HSTS. Static files get the same via `public/_headers`.
+- **Notifications** are end-to-end encrypted for the subscribed browser (RFC 8291) and signed with this install's VAPID key (RFC 8292). They're only sent to people who can still open the mailbox, and only to known push services.
 - **Mail content** is sanitised and shown in a sandboxed iframe with its own stricter policy (see [Reading mail safely](#reading-mail-safely)). Attachments and "Show original" are served with `nosniff` and a sandboxing CSP, and only images display inline.

@@ -158,7 +158,15 @@
   }
   html {
     @apply font-sans;
+    /* No rubber-band scrolling of the whole app when installed. */
+    overscroll-behavior: none;
+    -webkit-tap-highlight-color: transparent;
   }
+}
+
+/* Keeps the app clear of notches and the home indicator (viewport-fit=cover, see root.tsx). */
+.safe-area {
+	padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
 }
 /* Composer body (TipTap). Kept close to how the mail will look to recipients. */
 .prose-mail {

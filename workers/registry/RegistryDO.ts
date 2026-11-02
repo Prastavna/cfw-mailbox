@@ -1,11 +1,12 @@
 import { DurableObject } from "cloudflare:workers";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { drizzle, type DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 import type { Domain, Mailbox, MailboxAccess, MailboxRole, Member } from "../../shared/api";
 import { domainOf, normalizeAddress, normalizeDomain } from "../../shared/address";
 import { runMigrations } from "../lib/migrate";
 import { ok, type Result } from "../lib/result";
-import { domains, mailboxes, mailboxMembers, REGISTRY_MIGRATIONS, userExtensions } from "./schema";
+import { generateVapidKeys, type PushSubscriptionKeys, type VapidKeys } from "../push/webpush";
+import { domains, mailboxes, mailboxMembers, pushSubscriptions, REGISTRY_MIGRATIONS, serverKeys, userExtensions } from "./schema";
 
 /**
  * The single, global directory: which domains this install serves, which
@@ -175,6 +176,98 @@ export class RegistryDO extends DurableObject<Env> {
 				set: { enabled: row.enabled, settings: row.settings, secret: row.secret, updatedAt: row.updatedAt },
 			})
 			.run();
+	}
+
+	// ---- Push notifications ------------------------------------------------
+
+	private vapid: Promise<VapidKeys> | null = null;
+
+	/** This install's VAPID key pair, made the first time anyone asks. */
+	async vapidKeys(): Promise<VapidKeys> {
+		this.vapid ??= (async () => {
+			const row = this.db.select().from(serverKeys).where(eq(serverKeys.name, "vapid")).get();
+			if (row) return JSON.parse(row.value) as VapidKeys;
+			const keys = await generateVapidKeys();
+			// Two first requests can race through the await above; keep whichever was stored first.
+			this.db.insert(serverKeys).values({ name: "vapid", value: JSON.stringify(keys), createdAt: Date.now() }).onConflictDoNothing().run();
+			return JSON.parse(this.db.select().from(serverKeys).where(eq(serverKeys.name, "vapid")).get()!.value) as VapidKeys;
+		})();
+		return this.vapid;
+	}
+
+	/**
+	 * Saves a browser's subscription for `mailboxIds` (already checked against the user's
+	 * access). A browser belongs to whoever subscribed it last.
+	 */
+	async savePushSubscription(rawEmail: string, sub: PushSubscriptionKeys, mailboxIds: string[], replaces?: string): Promise<void> {
+		const now = Date.now();
+		const userEmail = normalizeAddress(rawEmail);
+		this.ctx.storage.transactionSync(() => {
+			if (replaces && replaces !== sub.endpoint) {
+				this.db
+					.delete(pushSubscriptions)
+					.where(and(eq(pushSubscriptions.endpoint, replaces), eq(pushSubscriptions.userEmail, userEmail)))
+					.run();
+			}
+			if (!mailboxIds.length) {
+				this.db.delete(pushSubscriptions).where(eq(pushSubscriptions.endpoint, sub.endpoint)).run();
+				return;
+			}
+			const row = { ...sub, userEmail, mailboxIds: JSON.stringify(mailboxIds), createdAt: now, updatedAt: now };
+			this.db
+				.insert(pushSubscriptions)
+				.values(row)
+				.onConflictDoUpdate({
+					target: pushSubscriptions.endpoint,
+					set: { userEmail, p256dh: sub.p256dh, auth: sub.auth, mailboxIds: row.mailboxIds, updatedAt: now },
+				})
+				.run();
+		});
+	}
+
+	/** This user's subscription for a browser, if it is theirs. */
+	async getPushSubscription(rawEmail: string, endpoint: string): Promise<(PushSubscriptionKeys & { mailboxIds: string[] }) | null> {
+		const row = this.db
+			.select()
+			.from(pushSubscriptions)
+			.where(and(eq(pushSubscriptions.endpoint, endpoint), eq(pushSubscriptions.userEmail, normalizeAddress(rawEmail))))
+			.get();
+		return row ? { endpoint: row.endpoint, p256dh: row.p256dh, auth: row.auth, mailboxIds: JSON.parse(row.mailboxIds) } : null;
+	}
+
+	/** Forgets a browser: one the user turned off, or one its push service says is gone. */
+	async removePushSubscription(endpoint: string, rawEmail?: string): Promise<void> {
+		this.db
+			.delete(pushSubscriptions)
+			.where(
+				rawEmail === undefined
+					? eq(pushSubscriptions.endpoint, endpoint)
+					: and(eq(pushSubscriptions.endpoint, endpoint), eq(pushSubscriptions.userEmail, normalizeAddress(rawEmail))),
+			)
+			.run();
+	}
+
+	/** Browsers to notify about new mail in a mailbox: subscribed to it, and still allowed to open it. */
+	async pushTargets(mailboxId: string, admins: string[]): Promise<(PushSubscriptionKeys & { userEmail: string })[]> {
+		const rows = this.db
+			.select()
+			.from(pushSubscriptions)
+			.where(sql`EXISTS (SELECT 1 FROM json_each(${pushSubscriptions.mailboxIds}) WHERE value = ${mailboxId})`)
+			.all();
+		if (!rows.length) return [];
+		const members = new Set(
+			this.db
+				.select({ email: mailboxMembers.userEmail })
+				.from(mailboxMembers)
+				.where(and(eq(mailboxMembers.mailboxId, mailboxId), inArray(mailboxMembers.userEmail, [...new Set(rows.map((r) => r.userEmail))])))
+				.all()
+				.map((r) => r.email),
+		);
+		const adminSet = new Set(admins.map(normalizeAddress));
+		const exists = adminSet.size > 0 && !!(await this.getMailbox(mailboxId));
+		return rows
+			.filter((r) => members.has(r.userEmail) || (exists && adminSet.has(r.userEmail)))
+			.map((r) => ({ endpoint: r.endpoint, p256dh: r.p256dh, auth: r.auth, userEmail: r.userEmail }));
 	}
 }
 

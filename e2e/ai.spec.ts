@@ -5,8 +5,9 @@ import { FAKE_LLM_MODEL, FAKE_LLM_URL } from "./fake-llm";
 test.describe.configure({ mode: "serial" });
 
 test("set up the AI Assistant from the extensions menu", async ({ page, request, mailbox }) => {
-	// Start from "off", with another provider, as a new user would.
-	await request.put("/api/extensions/ai", { data: { enabled: false, provider: "workers-ai" } });
+	// Start from "off" and unconfigured, as a new user would. (Not Workers AI: it lists its models
+	// from Cloudflare, and the end-to-end tests run without remote bindings.)
+	await request.put("/api/extensions/ai", { data: { enabled: false, provider: "anthropic", apiKey: null } });
 	await openMailbox(page, mailbox);
 	await expect(page.getByRole("button", { name: "Ask your inbox" })).toBeHidden();
 

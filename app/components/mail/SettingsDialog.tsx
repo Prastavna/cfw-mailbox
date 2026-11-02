@@ -20,8 +20,12 @@ import { Switch } from "~/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "~/components/ui/tabs";
 import { apiFetch, apiFileUrl, queryKeys } from "~/lib/api";
 import { settingsKey, useSettings } from "~/lib/compose-store";
+import { DevicePanel } from "./DevicePanel";
 
-export type SettingsTab = "general" | "vacation" | "filters";
+export type SettingsTab = "general" | "vacation" | "filters" | "device";
+
+/** The static demo has no service worker or push. */
+const showDevice = !import.meta.env.VITE_DEMO;
 
 interface SettingsDialogProps {
 	mailboxId: string;
@@ -112,16 +116,21 @@ export function SettingsDialog({ mailboxId, address, labels, open, onOpenChange,
 			<DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-2xl">
 				<DialogHeader>
 					<DialogTitle>Settings</DialogTitle>
-					<DialogDescription>For {address}. Everyone with access to this mailbox shares them.</DialogDescription>
+					<DialogDescription>
+						{current === "device"
+							? `For ${address}, in this browser only.`
+							: `For ${address}. Everyone with access to this mailbox shares them.`}
+					</DialogDescription>
 				</DialogHeader>
 				<Tabs value={current} onValueChange={(v) => setCurrent(v as SettingsTab)}>
 					<TabsList>
 						<TabsTrigger value="general">General</TabsTrigger>
 						<TabsTrigger value="vacation">Vacation</TabsTrigger>
 						<TabsTrigger value="filters">Filters</TabsTrigger>
+						{showDevice && <TabsTrigger value="device">This device</TabsTrigger>}
 					</TabsList>
 
-					{current !== "filters" && (
+					{current !== "filters" && current !== "device" && (
 						<form id="settings-form" onSubmit={submit} className="contents">
 							<TabsContent value="general" className="grid gap-5 pt-3">
 								<div className="grid gap-2">
@@ -220,9 +229,14 @@ export function SettingsDialog({ mailboxId, address, labels, open, onOpenChange,
 					<TabsContent value="filters" className="pt-3">
 						<FiltersPanel mailboxId={mailboxId} labels={labels} initialQuery={filterQuery} />
 					</TabsContent>
+					{showDevice && (
+						<TabsContent value="device">
+							<DevicePanel mailboxId={mailboxId} address={address} />
+						</TabsContent>
+					)}
 				</Tabs>
 
-				{current !== "filters" ? (
+				{current !== "filters" && current !== "device" ? (
 					<DialogFooter>
 						<Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
 							Cancel

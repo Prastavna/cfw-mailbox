@@ -46,6 +46,30 @@ export const userExtensions = sqliteTable(
 	(t) => [primaryKey({ columns: [t.userEmail, t.extensionId] })],
 );
 
+/** A browser that asked for new-mail notifications (Web Push), and for which mailboxes. */
+export const pushSubscriptions = sqliteTable(
+	"push_subscriptions",
+	{
+		endpoint: text("endpoint").primaryKey(),
+		userEmail: text("user_email").notNull(),
+		p256dh: text("p256dh").notNull(),
+		auth: text("auth").notNull(),
+		/** JSON array of mailbox IDs. Access is checked again before every notification. */
+		mailboxIds: text("mailbox_ids").notNull(),
+		createdAt: integer("created_at").notNull(),
+		updatedAt: integer("updated_at").notNull(),
+	},
+	(t) => [index("idx_push_user").on(t.userEmail)],
+);
+
+/** Keys this install generates for itself (the VAPID key pair). */
+export const serverKeys = sqliteTable("server_keys", {
+	name: text("name").primaryKey(),
+	/** JSON. */
+	value: text("value").notNull(),
+	createdAt: integer("created_at").notNull(),
+});
+
 export const REGISTRY_MIGRATIONS: readonly Migration[] = [
 	{
 		version: 1,
@@ -86,6 +110,27 @@ export const REGISTRY_MIGRATIONS: readonly Migration[] = [
 				updated_at INTEGER NOT NULL,
 				PRIMARY KEY (user_email, extension_id)
 			) WITHOUT ROWID;
+		`,
+	},
+	{
+		version: 3,
+		name: "push notifications",
+		sql: `
+			CREATE TABLE push_subscriptions (
+				endpoint TEXT PRIMARY KEY,
+				user_email TEXT NOT NULL,
+				p256dh TEXT NOT NULL,
+				auth TEXT NOT NULL,
+				mailbox_ids TEXT NOT NULL,
+				created_at INTEGER NOT NULL,
+				updated_at INTEGER NOT NULL
+			);
+			CREATE INDEX idx_push_user ON push_subscriptions(user_email);
+			CREATE TABLE server_keys (
+				name TEXT PRIMARY KEY,
+				value TEXT NOT NULL,
+				created_at INTEGER NOT NULL
+			);
 		`,
 	},
 ];

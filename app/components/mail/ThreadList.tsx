@@ -12,6 +12,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Skeleton } from "~/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "~/components/ui/tooltip";
 import { useMediaQuery } from "~/hooks/use-media-query";
+import { useSwipe } from "~/hooks/use-swipe";
 import { Actions, type MailActions } from "~/lib/actions";
 import { apiFetch, queryKeys, useThreads } from "~/lib/api";
 import type { Composer } from "~/lib/compose-store";
@@ -369,6 +370,13 @@ function ThreadRow({ thread, href, me, chips, selected, onSelect, labelId, actio
 	const subject = thread.subject || "(no subject)";
 	const inTrashOrSpam = labelId === "TRASH" || labelId === "SPAM";
 	const ids = [thread.id];
+	// Touch swipe: archive from the Inbox, otherwise delete (as Gmail's app does by default).
+	const swipeAction = draftOnly || inTrashOrSpam ? null : thread.labelIds.includes("INBOX") ? "archive" : "trash";
+	const swipe = useSwipe(!!swipeAction, () =>
+		swipeAction === "archive"
+			? actions.modify(ids, Actions.archive, { message: "Conversation archived." })
+			: actions.modify(ids, Actions.trash, { message: "Conversation moved to Trash." }),
+	);
 
 	const star = (
 		<button
@@ -386,116 +394,133 @@ function ThreadRow({ thread, href, me, chips, selected, onSelect, labelId, actio
 	);
 
 	return (
-		<div
-			className={cn(
-				"group relative flex h-full items-center border-b text-sm transition-shadow",
-				"hover:z-10 hover:shadow-[inset_1px_0_0_#dadce0,inset_-1px_0_0_#dadce0,0_1px_2px_0_rgba(60,64,67,.3),0_1px_3px_1px_rgba(60,64,67,.15)]",
-				selected ? "bg-mail-active/60" : thread.unread ? "bg-mail-surface" : "bg-mail-row-read",
-				thread.unread ? "font-semibold" : "text-foreground/80",
-			)}
-		>
-			{cursor && <span aria-hidden className="absolute inset-y-0 left-0 w-[3px] bg-primary" />}
-			<div className="flex shrink-0 items-center gap-1 pl-2">
-				<Checkbox
-					checked={selected}
-					onCheckedChange={(c) => onSelect(c === true)}
-					aria-label={`Select conversation: ${subject}`}
-					className="mx-1.5"
-				/>
-				<span className="hidden md:block">{star}</span>
-			</div>
-
-			<Link
-				to={href}
-				onClick={(e) => {
-					onOpen();
-					if (!onOpenDraft || e.metaKey || e.ctrlKey || e.shiftKey) return;
-					e.preventDefault();
-					onOpenDraft();
-				}}
-				className="flex h-full min-w-0 flex-1 items-center gap-3 pr-4 pl-2 outline-none focus-visible:bg-mail-active/50"
-				aria-label={`${thread.unread ? "Unread, " : ""}${draftOnly ? "Draft" : sender}${hasDraft && !draftOnly ? ", Draft" : ""}, ${subject}, ${date}`}
-			>
-				{/* Desktop: one line, Gmail style. */}
-				<span className="hidden w-[180px] shrink-0 truncate md:block">{senderCell}</span>
-				<span className="hidden min-w-0 flex-1 items-center gap-1.5 md:flex">
-					{chips.map((c) => (
-						<Badge
-							key={c.id}
-							variant="secondary"
-							className="h-5 shrink-0 rounded px-1.5 text-[11px] font-normal"
-							style={c.color ? { backgroundColor: c.color, color: "#fff" } : undefined}
-						>
-							{c.name}
-						</Badge>
-					))}
-					<span className="truncate">
-						{subject}
-						<span className="font-normal text-muted-foreground"> - {thread.snippet}</span>
-					</span>
-				</span>
-				{thread.hasAttachments && <Paperclip className="hidden size-4 shrink-0 text-muted-foreground md:block" aria-label="Has attachments" />}
-				<span
+		<div className={cn("relative h-full", swipe.offset !== 0 && "overflow-hidden")}>
+			{swipe.offset !== 0 && (
+				<div
+					aria-hidden
 					className={cn(
-						"hidden min-w-16 shrink-0 text-right text-xs whitespace-nowrap tabular-nums md:block md:group-hover:invisible",
-						!thread.unread && "font-normal",
-						snoozed && "text-amber-700 dark:text-amber-400",
-						snoozeOpen && "invisible",
+						"absolute inset-0 flex items-center px-6 text-white",
+						swipeAction === "archive" ? "bg-green-700" : "bg-red-700",
+						swipe.offset > 0 ? "justify-start" : "justify-end",
 					)}
-					title={snoozed ? "Snoozed until" : undefined}
 				>
-					{date}
-				</span>
+					{swipeAction === "archive" ? <Archive className="size-5" /> : <Trash2 className="size-5" />}
+				</div>
+			)}
+			<div
+				{...swipe.handlers}
+				style={swipe.offset ? { transform: `translateX(${swipe.offset}px)` } : undefined}
+				className={cn(
+					"group relative flex h-full touch-pan-y items-center border-b text-sm",
+					swipe.dragging ? "transition-shadow" : "transition-[box-shadow,transform] duration-150",
+					"hover:z-10 hover:shadow-[inset_1px_0_0_#dadce0,inset_-1px_0_0_#dadce0,0_1px_2px_0_rgba(60,64,67,.3),0_1px_3px_1px_rgba(60,64,67,.15)]",
+					selected ? "bg-mail-active/60" : thread.unread ? "bg-mail-surface" : "bg-mail-row-read",
+					thread.unread ? "font-semibold" : "text-foreground/80",
+				)}
+			>
+				{cursor && <span aria-hidden className="absolute inset-y-0 left-0 w-[3px] bg-primary" />}
+				<div className="flex shrink-0 items-center gap-1 pl-2">
+					<Checkbox
+						checked={selected}
+						onCheckedChange={(c) => onSelect(c === true)}
+						aria-label={`Select conversation: ${subject}`}
+						className="mx-1.5"
+					/>
+					<span className="hidden md:block">{star}</span>
+				</div>
 
-				{/* Mobile: stacked. */}
-				<span className="flex min-w-0 flex-1 flex-col gap-0.5 md:hidden">
-					<span className="flex items-baseline gap-2">
-						<span className="flex-1 truncate">{senderCell}</span>
-						<span className={cn("shrink-0 text-xs", !thread.unread && "font-normal", snoozed && "text-amber-700 dark:text-amber-400")}>{date}</span>
+				<Link
+					to={href}
+					onClick={(e) => {
+						onOpen();
+						if (!onOpenDraft || e.metaKey || e.ctrlKey || e.shiftKey) return;
+						e.preventDefault();
+						onOpenDraft();
+					}}
+					className="flex h-full min-w-0 flex-1 items-center gap-3 pr-4 pl-2 outline-none focus-visible:bg-mail-active/50"
+					aria-label={`${thread.unread ? "Unread, " : ""}${draftOnly ? "Draft" : sender}${hasDraft && !draftOnly ? ", Draft" : ""}, ${subject}, ${date}`}
+				>
+					{/* Desktop: one line, Gmail style. */}
+					<span className="hidden w-[180px] shrink-0 truncate md:block">{senderCell}</span>
+					<span className="hidden min-w-0 flex-1 items-center gap-1.5 md:flex">
+						{chips.map((c) => (
+							<Badge
+								key={c.id}
+								variant="secondary"
+								className="h-5 shrink-0 rounded px-1.5 text-[11px] font-normal"
+								style={c.color ? { backgroundColor: c.color, color: "#fff" } : undefined}
+							>
+								{c.name}
+							</Badge>
+						))}
+						<span className="truncate">
+							{subject}
+							<span className="font-normal text-muted-foreground"> - {thread.snippet}</span>
+						</span>
 					</span>
-					<span className="truncate">{subject}</span>
-					<span className="flex items-center gap-2 font-normal text-muted-foreground">
-						<span className="flex-1 truncate">{thread.snippet}</span>
-						{thread.hasAttachments && <Paperclip className="size-3.5 shrink-0" aria-label="Has attachments" />}
+					{thread.hasAttachments && <Paperclip className="hidden size-4 shrink-0 text-muted-foreground md:block" aria-label="Has attachments" />}
+					<span
+						className={cn(
+							"hidden min-w-16 shrink-0 text-right text-xs whitespace-nowrap tabular-nums md:block md:group-hover:invisible",
+							!thread.unread && "font-normal",
+							snoozed && "text-amber-700 dark:text-amber-400",
+							snoozeOpen && "invisible",
+						)}
+						title={snoozed ? "Snoozed until" : undefined}
+					>
+						{date}
 					</span>
-				</span>
-			</Link>
-			<span className="pr-2 md:hidden">{star}</span>
 
-			{/* Gmail's hover actions replace the date. */}
-			<div className={cn("absolute top-0 right-2 hidden h-full items-center bg-inherit md:group-hover:flex", snoozeOpen && "md:flex")}>
-				{!inTrashOrSpam &&
-					(thread.labelIds.includes("INBOX") ? (
-						<RowIconButton label="Archive" onClick={() => actions.modify(ids, Actions.archive, { message: "Conversation archived." })}>
-							<Archive className="size-4" />
+					{/* Mobile: stacked. */}
+					<span className="flex min-w-0 flex-1 flex-col gap-0.5 md:hidden">
+						<span className="flex items-baseline gap-2">
+							<span className="flex-1 truncate">{senderCell}</span>
+							<span className={cn("shrink-0 text-xs", !thread.unread && "font-normal", snoozed && "text-amber-700 dark:text-amber-400")}>{date}</span>
+						</span>
+						<span className="truncate">{subject}</span>
+						<span className="flex items-center gap-2 font-normal text-muted-foreground">
+							<span className="flex-1 truncate">{thread.snippet}</span>
+							{thread.hasAttachments && <Paperclip className="size-3.5 shrink-0" aria-label="Has attachments" />}
+						</span>
+					</span>
+				</Link>
+				<span className="pr-2 md:hidden">{star}</span>
+
+				{/* Gmail's hover actions replace the date. */}
+				<div className={cn("absolute top-0 right-2 hidden h-full items-center bg-inherit md:group-hover:flex", snoozeOpen && "md:flex")}>
+					{!inTrashOrSpam &&
+						(thread.labelIds.includes("INBOX") ? (
+							<RowIconButton label="Archive" onClick={() => actions.modify(ids, Actions.archive, { message: "Conversation archived." })}>
+								<Archive className="size-4" />
+							</RowIconButton>
+						) : (
+							<RowIconButton label="Move to Inbox" onClick={() => actions.modify(ids, Actions.moveToInbox, { message: "Conversation moved to Inbox." })}>
+								<Inbox className="size-4" />
+							</RowIconButton>
+						))}
+					{!inTrashOrSpam && (
+						<RowIconButton label="Delete" onClick={() => actions.modify(ids, Actions.trash, { message: "Conversation moved to Trash." })}>
+							<Trash2 className="size-4" />
+						</RowIconButton>
+					)}
+					{!inTrashOrSpam && (
+						<SnoozeMenu
+							compact
+							open={snoozeOpen}
+							onOpenChange={onSnoozeOpenChange}
+							onSnooze={(until, label) => void actions.snooze(ids, until, label)}
+						/>
+					)}
+					{thread.unread ? (
+						<RowIconButton label="Mark as read" onClick={() => actions.modify(ids, Actions.markRead)}>
+							<MailOpen className="size-4" />
 						</RowIconButton>
 					) : (
-						<RowIconButton label="Move to Inbox" onClick={() => actions.modify(ids, Actions.moveToInbox, { message: "Conversation moved to Inbox." })}>
-							<Inbox className="size-4" />
+						<RowIconButton label="Mark as unread" onClick={() => actions.modify(ids, Actions.markUnread)}>
+							<Mail className="size-4" />
 						</RowIconButton>
-					))}
-				{!inTrashOrSpam && (
-					<RowIconButton label="Delete" onClick={() => actions.modify(ids, Actions.trash, { message: "Conversation moved to Trash." })}>
-						<Trash2 className="size-4" />
-					</RowIconButton>
-				)}
-				{!inTrashOrSpam && (
-					<SnoozeMenu
-						compact
-						open={snoozeOpen}
-						onOpenChange={onSnoozeOpenChange}
-						onSnooze={(until, label) => void actions.snooze(ids, until, label)}
-					/>
-				)}
-				{thread.unread ? (
-					<RowIconButton label="Mark as read" onClick={() => actions.modify(ids, Actions.markRead)}>
-						<MailOpen className="size-4" />
-					</RowIconButton>
-				) : (
-					<RowIconButton label="Mark as unread" onClick={() => actions.modify(ids, Actions.markUnread)}>
-						<Mail className="size-4" />
-					</RowIconButton>
-				)}
+					)}
+				</div>
 			</div>
 		</div>
 	);

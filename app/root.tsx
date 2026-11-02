@@ -1,13 +1,27 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useState } from "react";
-import { isRouteErrorResponse, Links, Meta, Outlet, Scripts, ScrollRestoration } from "react-router";
+import { useEffect, useState } from "react";
+import { isRouteErrorResponse, Links, Meta, Outlet, Scripts, ScrollRestoration, useNavigate } from "react-router";
 
 import type { Route } from "./+types/root";
 import { Toaster } from "./components/ui/sonner";
 import { useNonce } from "./lib/nonce";
+import { registerServiceWorker, useServiceWorkerNavigation } from "./lib/pwa";
 import "./app.css";
 
-export const links: Route.LinksFunction = () => [{ rel: "icon", href: `${import.meta.env.BASE_URL}favicon.ico` }];
+/** The static demo can't be installed: it lives below a path and has no server. */
+const installable = !import.meta.env.VITE_DEMO;
+
+export const links: Route.LinksFunction = () => [
+	{ rel: "icon", href: `${import.meta.env.BASE_URL}favicon.ico`, sizes: "48x48" },
+	...(installable
+		? [
+				{ rel: "icon", href: "/icons/icon.svg", type: "image/svg+xml" },
+				{ rel: "apple-touch-icon", href: "/icons/apple-touch-icon.png" },
+				// Behind Cloudflare Access the manifest needs the sign-in cookie.
+				{ rel: "manifest", href: "/manifest.webmanifest", crossOrigin: "use-credentials" as const },
+			]
+		: []),
+];
 
 export function Layout({ children }: { children: React.ReactNode }) {
 	const nonce = useNonce();
@@ -15,7 +29,13 @@ export function Layout({ children }: { children: React.ReactNode }) {
 		<html lang="en">
 			<head>
 				<meta charSet="utf-8" />
-				<meta name="viewport" content="width=device-width, initial-scale=1" />
+				{/* viewport-fit=cover: the installed app draws under notches; app.css pads for them. */}
+				<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+				<meta name="theme-color" media="(prefers-color-scheme: light)" content="#f6f8fc" />
+				<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#111214" />
+				<meta name="mobile-web-app-capable" content="yes" />
+				<meta name="apple-mobile-web-app-title" content="Mail" />
+				<meta name="apple-mobile-web-app-status-bar-style" content="default" />
 				<Meta />
 				<Links nonce={nonce} />
 			</head>
@@ -29,6 +49,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
 }
 
 export default function App() {
+	const navigate = useNavigate();
+	useServiceWorkerNavigation(navigate);
+	useEffect(() => registerServiceWorker(), []);
 	const [queryClient] = useState(
 		() => new QueryClient({ defaultOptions: { queries: { staleTime: 30_000, refetchOnWindowFocus: true } } }),
 	);

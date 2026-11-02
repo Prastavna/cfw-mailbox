@@ -296,3 +296,40 @@ export const SEND_LIMITS = {
 	messageBytes: 25 * 1024 * 1024,
 	subjectChars: 998,
 } as const;
+
+// ---- Notifications ---------------------------------------------------------------
+
+/** What the server pushes to a browser (encrypted end to end); the service worker shows it. */
+export type PushPayload =
+	| {
+			type: "mail";
+			mailboxId: string;
+			mailboxAddress: string;
+			threadId: string;
+			/** The sender. */
+			title: string;
+			/** Subject, then a line of the message. */
+			body: string;
+	  }
+	| { type: "test"; title: string; body: string };
+
+/** GET /api/push: what a browser needs to subscribe. */
+export interface PushConfig {
+	/** VAPID public key (base64url), the `applicationServerKey`. */
+	publicKey: string;
+}
+
+/** PUT /api/push/subscription */
+export interface SavePushSubscriptionRequest {
+	subscription: { endpoint: string; keys: { p256dh: string; auth: string } };
+	/** Mailboxes this browser is notified about. Empty turns notifications off. */
+	mailboxIds: string[];
+	/** An older endpoint of this browser to forget (after the push service rotated it). */
+	replaces?: string;
+}
+
+/** GET /api/push/subscription?endpoint=… */
+export interface PushSubscriptionState {
+	mailboxIds: string[];
+}
+

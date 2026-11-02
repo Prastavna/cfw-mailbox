@@ -23,9 +23,11 @@ workers/
   email/inbound.ts   Email Routing handler
   email/outbound.ts  Builds Email Service payloads; explains send errors
   extensions/ai/     AI Assistant: settings and encrypted keys, providers, prompts, routes
+  push/              Web Push: VAPID and payload encryption (webpush.ts), new-mail notifications
   email/export.ts    mbox export (mbox.ts: mboxrd escaping; mime.ts: rebuilds sent mail)
   lib/security-headers.ts  Headers added to every response
   lib/crypto.ts      Encrypts users' secrets (AI keys) with ENCRYPTION_KEY
+public/sw.js         Service worker: offline app and mail, notifications (app/lib/pwa.ts drives it)
 test/                Vitest tests that run in workerd (fixtures/: mail as real clients send it)
 e2e/                 Playwright tests against `pnpm dev`
 ```
@@ -57,7 +59,7 @@ pnpm exec playwright install chromium   # once
 pnpm test:e2e             # end-to-end, against its own `pnpm dev` on port 5180
 ```
 
-The end-to-end tests keep their data in `.wrangler/e2e-state` and create a fresh mailbox per test, so they never touch your dev mail. Set `PLAYWRIGHT_CHROMIUM_EXECUTABLE` to use a Chromium you already have. The AI Assistant tests talk to a scripted, OpenAI-compatible fake provider that the test run starts on port 5181 (`e2e/fake-llm.ts`), so they need no key.
+The end-to-end tests keep their data in `.wrangler/e2e-state` and create a fresh mailbox per test, so they never touch your dev mail. Set `PLAYWRIGHT_CHROMIUM_EXECUTABLE` to use a Chromium you already have. The AI Assistant tests talk to a scripted, OpenAI-compatible fake provider that the test run starts on port 5181 (`e2e/fake-llm.ts`), so they need no key. The dev server they start has no remote bindings, so they don't need a Cloudflare login either (Workers AI isn't available there).
 
 ## Demo (GitHub Pages)
 

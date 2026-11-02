@@ -19,8 +19,8 @@ export function createWorker(fallback: Fallback) {
 				pathname === "/api" || pathname.startsWith("/api/") ? await api.fetch(request, env, ctx) : await fallback(request, env, ctx);
 			return withSecurityHeaders(request, response);
 		},
-		async email(message, env) {
-			await handleInbound(message, env);
+		async email(message, env, ctx) {
+			await handleInbound(message, env, ctx);
 		},
 	} satisfies ExportedHandler<Env>;
 }
