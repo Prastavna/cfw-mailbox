@@ -1,5 +1,5 @@
 import { Ellipsis, ImageOff } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Component, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AttachmentInfo, MessageDetail } from "../../../shared/api";
 import { Button } from "~/components/ui/button";
 import { attachmentUrl } from "~/lib/api";
@@ -11,8 +11,32 @@ interface EmailBodyProps {
 }
 
 export function EmailBody({ mailboxId, message }: EmailBodyProps) {
-	if (message.html) return <HtmlBody mailboxId={mailboxId} message={message} html={message.html} />;
-	return <TextBody text={message.text ?? ""} />;
+	const text = <TextBody text={message.text ?? ""} />;
+	if (!message.html) return text;
+	// Mail HTML is written by strangers: if rendering it fails, show the
+	// plain-text version rather than taking the whole app down.
+	return (
+		<RenderBoundary fallback={text}>
+			<HtmlBody mailboxId={mailboxId} message={message} html={message.html} />
+		</RenderBoundary>
+	);
+}
+
+/** Shows `fallback` if rendering `children` throws. */
+export class RenderBoundary extends Component<{ fallback: ReactNode; children: ReactNode }, { failed: boolean }> {
+	state = { failed: false };
+
+	static getDerivedStateFromError() {
+		return { failed: true };
+	}
+
+	componentDidCatch(error: unknown) {
+		console.error("Couldn't render message:", error);
+	}
+
+	render() {
+		return this.state.failed ? this.props.fallback : this.props.children;
+	}
 }
 
 function QuoteToggle({ shown, onToggle }: { shown: boolean; onToggle: () => void }) {

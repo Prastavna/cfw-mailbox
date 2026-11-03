@@ -75,6 +75,18 @@ describe("text helpers", () => {
 		expect(htmlToText("<p>Free at <strong>noon</strong>? <a href=\"x\">Link</a>s</p><p>-- <br>Me</p>")).toBe("Free at noon? Links\n--\nMe");
 	});
 
+	it("converts hostile HTML in linear time", () => {
+		const big = 256 * 1024;
+		for (const piece of ["<script", "<!--", "<a", "<style>", "<", "<p x='"]) {
+			const start = performance.now();
+			htmlToText(piece.repeat(big / piece.length));
+			expect(performance.now() - start, piece).toBeLessThan(1000);
+		}
+		expect(htmlToText("a <!-- hidden --> b <script>x</script>c <style>p{}</STYLE>d")).toBe("a b c d");
+		expect(htmlToText("a <> b <c")).toBe("a <> b <c");
+		expect(htmlToText("x<script>never closed")).toBe("x never closed");
+	});
+
 	it("normalises reply subjects", () => {
 		expect(normalizeSubject("Re: RE: Fwd:  Quarterly   Report")).toBe("quarterly report");
 		expect(normalizeSubject("AW: Hallo")).toBe("hallo");

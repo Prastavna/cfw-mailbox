@@ -34,7 +34,9 @@ import type {
 import type { MimeSource } from "../email/mime";
 import { buildEmail, describeSendError, normalizeMessageId, type OutgoingMessage, referencesHeader, transport } from "../email/outbound";
 import { htmlToText, isReplySubject, makeSnippet, normalizeSubject } from "../email/parse";
+import { adminEmails } from "../auth/access";
 import { runMigrations } from "../lib/migrate";
+import { getRegistry } from "../registry/RegistryDO";
 import { fail, ok, type Result } from "../lib/result";
 import { messageKeys, TEXT_LIMIT } from "./keys";
 import { parseSearch } from "../../shared/search";
@@ -794,49 +796,61 @@ export class MailboxDO extends DurableObject<Env> {
 	}
 
 	/**
-	 * Permanently deletes threads that are in Trash or Spam (others are
-	 * skipped), including their files in R2.
+	 * Permanently deletes the Trash and Spam messages in the given threads,
+	 * with their files in R2. Other messages in the same conversation stay
+	 * (an inbound sender can thread a trashed message into a real
+	 * conversation), and threads with nothing in Trash or Spam are skipped.
 	 */
 	async deleteThreads(threadIds: string[]): Promise<Result<{ threadIds: string[] }>> {
 		if (threadIds.length > MAX_BATCH) return fail("invalid", `At most ${MAX_BATCH} threads at a time`);
 		const { ids, keys } = this.ctx.storage.transactionSync(() => {
-			const ids = this.sql
-				.exec<{ thread_id: string }>(
-					`SELECT DISTINCT thread_id FROM thread_labels
-					 WHERE thread_id IN (SELECT value FROM json_each(?)) AND label_id IN ('TRASH', 'SPAM')`,
+			const messageIds = this.sql
+				.exec<{ id: string }>(
+					`SELECT DISTINCT m.id FROM messages m JOIN message_labels ml ON ml.message_id = m.id
+					 WHERE m.thread_id IN (SELECT value FROM json_each(?)) AND ml.label_id IN ('TRASH', 'SPAM')`,
 					JSON.stringify(threadIds),
 				)
 				.toArray()
-				.map((r) => r.thread_id);
-			if (!ids.length) return { ids, keys: [] as string[] };
-			const json = JSON.stringify(ids);
-			const inThreads = "SELECT id FROM messages WHERE thread_id IN (SELECT value FROM json_each(?))";
-			const keys = [
-				...this.sql
-					.exec<{ k: string }>(
-						`SELECT raw_key AS k FROM messages WHERE thread_id IN (SELECT value FROM json_each(?)) AND raw_key IS NOT NULL
-						 UNION ALL SELECT html_key FROM messages WHERE thread_id IN (SELECT value FROM json_each(?)) AND html_key IS NOT NULL
-						 UNION ALL SELECT r2_key FROM attachments WHERE message_id IN (${inThreads})`,
-						json,
-						json,
-						json,
-					)
-					.toArray()
-					.map((r) => r.k),
-			];
-			// Children first, so this works whether or not foreign keys are enforced.
-			this.sql.exec(`DELETE FROM attachments WHERE message_id IN (${inThreads})`, json);
-			this.sql.exec(`DELETE FROM message_labels WHERE message_id IN (${inThreads})`, json);
-			this.sql.exec("DELETE FROM messages WHERE thread_id IN (SELECT value FROM json_each(?))", json);
-			this.sql.exec("DELETE FROM thread_labels WHERE thread_id IN (SELECT value FROM json_each(?))", json);
-			this.sql.exec("DELETE FROM snoozes WHERE thread_id IN (SELECT value FROM json_each(?))", json);
-			this.sql.exec("DELETE FROM threads WHERE id IN (SELECT value FROM json_each(?))", json);
-			return { ids, keys };
+				.map((r) => r.id)
+				.filter((id) => !this.inFlight.has(id));
+			return this.deleteMessages(messageIds);
 		});
 
 		for (let i = 0; i < keys.length; i += 1000) await this.env.BUCKET.delete(keys.slice(i, i + 1000));
 		if (ids.length) this.broadcast({ type: "threads.changed", threadIds: ids });
 		return ok({ threadIds: ids });
+	}
+
+	/**
+	 * Deletes messages with their attachments and labels, then recomputes
+	 * (or removes, once empty) their threads. Call inside a transaction;
+	 * returns the affected thread ids and the R2 keys to delete afterwards.
+	 */
+	private deleteMessages(messageIds: string[]): { ids: string[]; keys: string[] } {
+		if (!messageIds.length) return { ids: [], keys: [] };
+		const json = JSON.stringify(messageIds);
+		const inIds = "SELECT value FROM json_each(?)";
+		const ids = this.sql
+			.exec<{ thread_id: string }>(`SELECT DISTINCT thread_id FROM messages WHERE id IN (${inIds})`, json)
+			.toArray()
+			.map((r) => r.thread_id);
+		const keys = this.sql
+			.exec<{ k: string }>(
+				`SELECT raw_key AS k FROM messages WHERE id IN (${inIds}) AND raw_key IS NOT NULL
+				 UNION ALL SELECT html_key FROM messages WHERE id IN (${inIds}) AND html_key IS NOT NULL
+				 UNION ALL SELECT r2_key FROM attachments WHERE message_id IN (${inIds})`,
+				json,
+				json,
+				json,
+			)
+			.toArray()
+			.map((r) => r.k);
+		// Children first, so this works whether or not foreign keys are enforced.
+		this.sql.exec(`DELETE FROM attachments WHERE message_id IN (${inIds})`, json);
+		this.sql.exec(`DELETE FROM message_labels WHERE message_id IN (${inIds})`, json);
+		this.sql.exec(`DELETE FROM messages WHERE id IN (${inIds})`, json);
+		for (const id of ids) this.recomputeThread(id);
+		return { ids, keys };
 	}
 
 	// ---- Labels --------------------------------------------------------------
@@ -1501,30 +1515,7 @@ export class MailboxDO extends DurableObject<Env> {
 			.toArray()
 			.map((r) => r.message_id);
 		if (!ids.length) return;
-		const { keys, threadIds } = this.ctx.storage.transactionSync(() => {
-			const json = JSON.stringify(ids);
-			const inIds = "SELECT value FROM json_each(?)";
-			const threadIds = this.sql
-				.exec<{ thread_id: string }>(`SELECT DISTINCT thread_id FROM messages WHERE id IN (${inIds})`, json)
-				.toArray()
-				.map((r) => r.thread_id);
-			const keys = this.sql
-				.exec<{ k: string }>(
-					`SELECT raw_key AS k FROM messages WHERE id IN (${inIds}) AND raw_key IS NOT NULL
-					 UNION ALL SELECT html_key FROM messages WHERE id IN (${inIds}) AND html_key IS NOT NULL
-					 UNION ALL SELECT r2_key FROM attachments WHERE message_id IN (${inIds})`,
-					json,
-					json,
-					json,
-				)
-				.toArray()
-				.map((r) => r.k);
-			this.sql.exec(`DELETE FROM attachments WHERE message_id IN (${inIds})`, json);
-			this.sql.exec(`DELETE FROM message_labels WHERE message_id IN (${inIds})`, json);
-			this.sql.exec(`DELETE FROM messages WHERE id IN (${inIds})`, json);
-			for (const id of threadIds) this.recomputeThread(id);
-			return { keys, threadIds };
-		});
+		const { ids: threadIds, keys } = this.ctx.storage.transactionSync(() => this.deleteMessages(ids.filter((id) => !this.inFlight.has(id))));
 		for (let i = 0; i < keys.length; i += 1000) await this.env.BUCKET.delete(keys.slice(i, i + 1000));
 		this.broadcast({ type: "threads.changed", threadIds });
 	}
@@ -1739,18 +1730,48 @@ export class MailboxDO extends DurableObject<Env> {
 
 	// ---- Live updates ------------------------------------------------------
 
-	/** Only WebSocket upgrades come through fetch(); the Worker has already checked access. */
+	/**
+	 * Only WebSocket upgrades come through fetch(). The Worker has already
+	 * checked access and names the user and mailbox in trusted headers
+	 * (it overwrites any the client sent). Each socket is tagged with its
+	 * user so it can be closed when that user loses access.
+	 */
 	async fetch(request: Request): Promise<Response> {
 		if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
 			return new Response("Expected a WebSocket upgrade", { status: 426 });
 		}
+		const user = request.headers.get(SOCKET_USER_HEADER);
+		const mailboxId = request.headers.get(SOCKET_MAILBOX_HEADER);
+		if (!user || !mailboxId) return new Response("Missing socket identity", { status: 400 });
 		const { 0: client, 1: server } = new WebSocketPair();
-		this.ctx.acceptWebSocket(server);
+		this.ctx.acceptWebSocket(server, [user]);
+		server.serializeAttachment({ user, mailboxId, checkedAt: Date.now() } satisfies SocketInfo);
 		return new Response(null, { status: 101, webSocket: client });
 	}
 
+	/** Closes the live sockets of a user who lost access, or every socket when the mailbox is deleted. */
+	async revokeSockets(userEmail?: string): Promise<void> {
+		for (const ws of userEmail ? this.ctx.getWebSockets(userEmail) : this.ctx.getWebSockets()) {
+			try {
+				ws.close(SOCKET_REVOKED, "Access revoked");
+			} catch {
+				// Already closed.
+			}
+		}
+	}
+
 	async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
-		if (message === "ping") ws.send("pong");
+		if (message !== "ping") return;
+		// Re-check access now and then, which also covers changes no route
+		// can hook (an admin removed from ADMIN_EMAILS).
+		const info = ws.deserializeAttachment() as SocketInfo | null;
+		if (!info) return ws.close(SOCKET_REVOKED, "Access revoked");
+		if (Date.now() - info.checkedAt > SOCKET_RECHECK_MS) {
+			const role = await getRegistry(this.env).roleFor(info.mailboxId, info.user, adminEmails(this.env).has(info.user));
+			if (!role) return ws.close(SOCKET_REVOKED, "Access revoked");
+			ws.serializeAttachment({ ...info, checkedAt: Date.now() } satisfies SocketInfo);
+		}
+		ws.send("pong");
 	}
 
 	async webSocketClose(ws: WebSocket, code: number): Promise<void> {
@@ -1767,6 +1788,20 @@ export class MailboxDO extends DurableObject<Env> {
 			}
 		}
 	}
+}
+
+/** Trusted headers the Worker sets on /events before forwarding the upgrade. */
+export const SOCKET_USER_HEADER = "X-Mailbox-User";
+export const SOCKET_MAILBOX_HEADER = "X-Mailbox-Id";
+/** Close code for a socket whose user lost access to the mailbox. */
+const SOCKET_REVOKED = 4403;
+/** How often an open socket's access is re-checked (on its next ping). */
+const SOCKET_RECHECK_MS = 5 * 60_000;
+
+interface SocketInfo {
+	user: string;
+	mailboxId: string;
+	checkedAt: number;
 }
 
 export function getMailbox(env: Env, mailboxId: string): DurableObjectStub<MailboxDO> {

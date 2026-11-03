@@ -18,6 +18,7 @@ import { useAiReady } from "~/lib/extensions";
 import { formatSize } from "~/lib/format";
 import { ComposeAssist } from "~/components/extensions/ai/ComposeAssist";
 import { cn } from "~/lib/utils";
+import { RenderBoundary } from "~/components/mail/EmailBody";
 import { FormattingToolbar, RichEditor } from "./RichEditor";
 import { RecipientInput, type RecipientInputHandle } from "./RecipientInput";
 
@@ -488,7 +489,9 @@ function ComposeForm({ win, mailbox, initial }: { win: ComposeWindow; mailbox: M
 							<Ellipsis className="size-4" />
 						</Button>
 						{showQuote && (
-							<QuotePreview html={initial.quote} mailboxId={mailbox.id} draftId={draftId.current} attachments={attachments} />
+							<RenderBoundary fallback={null}>
+								<QuotePreview html={initial.quote} mailboxId={mailbox.id} draftId={draftId.current} attachments={attachments} />
+							</RenderBoundary>
 						)}
 					</div>
 				)}

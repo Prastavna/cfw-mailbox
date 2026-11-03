@@ -213,6 +213,35 @@ describe("live updates", () => {
 		ws.close();
 	});
 
+	it("closes open WebSockets when access is revoked", async () => {
+		const open = async (mb: Mailbox) => {
+			const res = await call(`/api/mailboxes/${mb.id}/events`, { headers: { Upgrade: "websocket" } });
+			expect(res.status).toBe(101);
+			const ws = res.webSocket!;
+			ws.accept();
+			const closed = new Promise<number>((resolve) => ws.addEventListener("close", (e) => resolve(e.code)));
+			return { ws, closed };
+		};
+		// Removing a member closes that member's sockets.
+		const mb = await makeMailbox();
+		const added = await call(`/api/admin/mailboxes/${mb.id}/members`, {
+			method: "PUT",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ email: "admin@example.test", role: "member" }),
+		});
+		expect(added.status).toBe(200);
+		const member = await open(mb);
+		const removed = await call(`/api/admin/mailboxes/${mb.id}/members/Admin@Example.test`, { method: "DELETE" });
+		expect(removed.status).toBe(204);
+		expect(await member.closed).toBe(4403);
+
+		// Deleting a mailbox closes every socket on it.
+		const other = await makeMailbox();
+		const sockets = [await open(other), await open(other)];
+		expect((await call(`/api/admin/mailboxes/${other.id}`, { method: "DELETE" })).status).toBe(204);
+		expect(await Promise.all(sockets.map((s) => s.closed))).toEqual([4403, 4403]);
+	});
+
 	it("refuses cross-site WebSockets and non-JSON writes", async () => {
 		const mb = await makeMailbox();
 		const ws = await call(`/api/mailboxes/${mb.id}/events`, { headers: { Upgrade: "websocket", Origin: "https://evil.test" } });

@@ -423,8 +423,9 @@ export class DemoMailbox {
 			return labels.has("TRASH") || labels.has("SPAM");
 		});
 		for (const id of ids) {
-			for (const m of this.messagesOf(id)) this.messages.delete(m.id);
-			this.threads.delete(id);
+			// Only the trashed messages go; the rest of the conversation stays.
+			for (const m of this.messagesOf(id)) if (m.labels.has("TRASH") || m.labels.has("SPAM")) this.messages.delete(m.id);
+			if (!this.messagesOf(id).length) this.threads.delete(id);
 		}
 		this.changed(ids);
 		return { threadIds: ids };

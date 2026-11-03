@@ -136,15 +136,72 @@ export function parseAuthResults(value: string | null): AuthResults | null {
 
 const ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " " };
 
-/** Rough HTML → text, good enough for snippets and search. */
+/** Elements dropped with everything inside them. */
+const DROPPED_ELEMENTS = new Set(["script", "style", "head", "title"]);
+/** Tags that end a line ("<br>", or the end of a block). */
+const LINE_BREAK_TAGS = new Set(["br", "/p", "/div", "/li", "/tr", "/h1", "/h2", "/h3", "/h4", "/h5", "/h6", "/blockquote"]);
+/** Inline formatting doesn't separate words: "<b>noon</b>?" is "noon?". */
+const INLINE_TAGS = new Set("a b strong i em u s strike del ins span font code small big sub sup mark abbr".split(" "));
+const TAG_NAME = /\/?[a-z][a-z0-9]*/iy;
+
+/**
+ * Rough HTML → text, good enough for snippets and search.
+ *
+ * One left-to-right pass with indexOf, so the cost stays linear in the
+ * input even for hostile markup (thousands of unclosed "<script" or "<!--"
+ * openers). Inbound HTML comes from anyone on the internet.
+ */
 export function htmlToText(html: string): string {
-	return html
-		.replace(/<(script|style|head|title)\b[\s\S]*?<\/\1\s*>/gi, " ")
-		.replace(/<!--[\s\S]*?-->/g, " ")
-		.replace(/<(br|\/p|\/div|\/li|\/tr|\/h[1-6]|\/blockquote)\b[^>]*>/gi, "\n")
-		// Inline formatting doesn't separate words: "<b>noon</b>?" is "noon?".
-		.replace(/<\/?(a|b|strong|i|em|u|s|strike|del|ins|span|font|code|small|big|sub|sup|mark|abbr)\b[^>]*>/gi, "")
-		.replace(/<[^>]+>/g, " ")
+	const out: string[] = [];
+	// Where each dropped element's closing tag was last found (-1: none after that point).
+	const closeAt = new Map<string, number>();
+	let i = 0;
+	while (i < html.length) {
+		const lt = html.indexOf("<", i);
+		if (lt < 0) {
+			out.push(html.slice(i));
+			break;
+		}
+		out.push(html.slice(i, lt));
+
+		if (html.startsWith("<!--", lt)) {
+			const end = html.indexOf("-->", lt + 4);
+			if (end >= 0) {
+				out.push(" ");
+				i = end + 3;
+				continue;
+			}
+		}
+
+		TAG_NAME.lastIndex = lt + 1;
+		const name = TAG_NAME.exec(html)?.[0].toLowerCase() ?? "";
+
+		if (DROPPED_ELEMENTS.has(name)) {
+			const close = findClose(html, name, lt, closeAt);
+			if (close) {
+				out.push(" ");
+				i = close;
+				continue;
+			}
+		}
+
+		const gt = html.indexOf(">", lt + 1);
+		if (gt < 0) {
+			// No tag can close: the rest is text.
+			out.push(html.slice(lt));
+			break;
+		}
+		if (gt === lt + 1) {
+			out.push("<");
+			i = lt + 1;
+			continue;
+		}
+		out.push(LINE_BREAK_TAGS.has(name) ? "\n" : INLINE_TAGS.has(name.replace(/^\//, "")) ? "" : " ");
+		i = gt + 1;
+	}
+
+	return out
+		.join("")
 		.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, e: string) => {
 			if (e[0] === "#") {
 				const code = e[1]?.toLowerCase() === "x" ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10);
@@ -158,9 +215,29 @@ export function htmlToText(html: string): string {
 		.trim();
 }
 
+/**
+ * Index just past the "</name>" that closes the element opened at `from`,
+ * or 0 if there is none. Remembers results in `cache`, so a run of unclosed
+ * openers costs one scan, not one scan each.
+ */
+function findClose(html: string, name: string, from: number, cache: Map<string, number>): number {
+	const known = cache.get(name);
+	if (known === -1) return 0;
+	if (known !== undefined && known > from) return known;
+	const re = new RegExp(`</${name}\\s*>`, "gi");
+	re.lastIndex = from;
+	const m = re.exec(html);
+	const end = m ? m.index + m[0].length : -1;
+	cache.set(name, end);
+	return Math.max(end, 0);
+}
+
+/** How much HTML a snippet looks at; the preview only needs the start. */
+const SNIPPET_HTML_LIMIT = 64 * 1024;
+
 /** Short preview line: drops quoted replies and collapses whitespace. */
 export function makeSnippet(text: string | null, html: string | null, max = 200): string {
-	const body = text ?? (html ? htmlToText(html) : "");
+	const body = text ?? (html ? htmlToText(html.slice(0, SNIPPET_HTML_LIMIT)) : "");
 	const lines = body.split(/\r?\n/);
 	const kept: string[] = [];
 	for (const line of lines) {

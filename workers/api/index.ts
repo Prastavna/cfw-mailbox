@@ -20,7 +20,7 @@ import {
 	type ThreadPage,
 	UNDO_SEND_CHOICES,
 } from "../../shared/api";
-import { domainOf, isValidAddress, isValidDomain } from "../../shared/address";
+import { domainOf, isValidAddress, isValidDomain, normalizeAddress } from "../../shared/address";
 import { authenticate } from "../auth/access";
 import { exportMbox } from "../email/export";
 import { extensionRoutes, mailboxAiRoutes } from "../extensions/ai/routes";
@@ -30,7 +30,7 @@ import { parseVCards, toVCards } from "../../shared/vcard";
 import { pushRoutes } from "./push";
 import { MAX_QUERY_LENGTH } from "../../shared/search";
 import { messageKeys } from "../mailbox/keys";
-import { getMailbox } from "../mailbox/MailboxDO";
+import { getMailbox, SOCKET_MAILBOX_HEADER, SOCKET_USER_HEADER } from "../mailbox/MailboxDO";
 import { getRegistry, type Result } from "../registry/RegistryDO";
 
 
@@ -255,6 +255,7 @@ admin.post("/mailboxes", async (c) => {
 admin.delete("/mailboxes/:id", async (c) => {
 	// Removes the mailbox from the directory. Stored mail is purged by a later cleanup job.
 	unwrap(await getRegistry(c.env).deleteMailbox(c.req.param("id")));
+	await getMailbox(c.env, c.req.param("id")).revokeSockets();
 	return c.body(null, 204);
 });
 
@@ -265,6 +266,7 @@ admin.put("/mailboxes/:id/members", async (c) => {
 });
 admin.delete("/mailboxes/:id/members/:email", async (c) => {
 	unwrap(await getRegistry(c.env).removeMember(c.req.param("id"), c.req.param("email")));
+	await getMailbox(c.env, c.req.param("id")).revokeSockets(normalizeAddress(c.req.param("email")));
 	return c.body(null, 204);
 });
 
@@ -527,7 +529,11 @@ mailbox.post("/drafts/:draftId/cancel-send", async (c) => {
 // Live updates: the mailbox Durable Object accepts the WebSocket and pushes MailboxEvents.
 mailbox.get("/events", async (c) => {
 	if (c.req.header("Upgrade")?.toLowerCase() !== "websocket") throw new HttpError(426, "Expected a WebSocket upgrade");
-	return mailboxStub(c).fetch(c.req.raw);
+	// Name the user and mailbox for the Durable Object, replacing anything the client sent.
+	const headers = new Headers(c.req.raw.headers);
+	headers.set(SOCKET_USER_HEADER, normalizeAddress(c.get("identity").email));
+	headers.set(SOCKET_MAILBOX_HEADER, c.req.param("mailboxId")!);
+	return mailboxStub(c).fetch(new Request(c.req.raw, { headers }));
 });
 
 mailbox.route("/ai", mailboxAiRoutes);

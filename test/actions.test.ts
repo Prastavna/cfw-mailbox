@@ -125,6 +125,24 @@ describe("delete forever", () => {
 		expect((await call(`${api}/threads/${plans.id}`)).status).toBe(404);
 		expect(await files()).toBe(1);
 	});
+
+	it("keeps messages that aren't themselves in Trash or Spam", async () => {
+		const { mb, api, plans, thread } = await setup();
+		const files = async () => (await env.BUCKET.list({ prefix: `mailboxes/${mb.id}/` })).objects.length;
+		const [first, second] = (await thread(plans.id)).messages;
+		// Only the reply is trashed, so the thread shows up in Trash too.
+		const res = await send(`${api}/messages/modify`, {
+			changes: [{ messageId: second!.id, addLabelIds: ["TRASH"], removeLabelIds: ["INBOX"] }],
+		});
+		expect(res.status).toBe(200);
+
+		const del = await send(`${api}/threads/delete`, { threadIds: [plans.id] });
+		expect(await del.json()).toEqual({ threadIds: [plans.id] });
+		const left = await thread(plans.id);
+		expect(left.messages.map((m) => m.id)).toEqual([first!.id]);
+		expect(left.messages[0]!.labelIds).toContain("INBOX");
+		expect(await files()).toBe(2);
+	});
 });
 
 describe("labels", () => {

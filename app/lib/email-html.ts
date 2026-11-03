@@ -69,7 +69,8 @@ export function renderEmailHtml(html: string, opts: RenderOptions): RenderedEmai
 		if (el.tagName === "IMG") {
 			const src = el.getAttribute("src") ?? "";
 			if (src.toLowerCase().startsWith("cid:")) {
-				const attachment = byCid.get(decodeURIComponent(src.slice(4)).toLowerCase());
+				const cid = safeDecode(src.slice(4));
+				const attachment = cid === null ? undefined : byCid.get(cid.toLowerCase());
 				if (attachment) el.setAttribute("src", opts.inlineImageUrl(attachment));
 				else el.removeAttribute("src");
 			} else if (REMOTE_URL.test(src)) {
@@ -152,4 +153,13 @@ export function linkify(text: string): (string | { url: string })[] {
 	}
 	if (last < text.length) out.push(text.slice(last));
 	return out;
+}
+
+/** decodeURIComponent that returns null for malformed input (mail can contain "cid:%"). */
+function safeDecode(s: string): string | null {
+	try {
+		return decodeURIComponent(s);
+	} catch {
+		return null;
+	}
 }
